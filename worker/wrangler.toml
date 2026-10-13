@@ -1,0 +1,26 @@
+name = "commute-guard"
+main = "src/index.js"
+compatibility_date = "2025-09-15"
+
+# The browser pages import the same helpers the checker uses (time, schedule, Transitous).
+[build]
+command = "mkdir -p public/shared && cp ../shared/*.mjs public/shared/"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+[[kv_namespaces]]
+binding = "CG"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Watchdog: every 10 min in the UTC hours around the 4 checks (covers both PDT and PST).
+# If a check hasn't reported 15 min after its scheduled time, push a "didn't run" warning.
+[triggers]
+crons = ["*/10 4,5,12,13,14,15 * * *"]
+
+[vars]
+NTFY_SERVER = "https://ntfy.sh"
+
+# Secrets (wrangler secret put …): APP_PASSCODE, WRITE_TOKEN, NTFY_TOPIC

@@ -1,0 +1,20 @@
+{
+ "header": {
+  "gtfsRealtimeVersion": "2.0",
+  "timestamp": 1791982800
+ },
+ "entity": [
+  {
+   "id": "1",
+   "tripUpdate": {
+    "trip": {
+     "tripId": "t_6144183_b_86948_tn_0",
+     "routeId": "SEA",
+     "startTime": "07:00:00",
+     "startDate": "20261014",
+     "scheduleRelationship": "CANCELED"
+    }
+   }
+  }
+ ]
+}

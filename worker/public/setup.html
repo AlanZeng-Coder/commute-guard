@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>设置路线 · 通勤哨兵</title>
+    <meta name="theme-color" content="#0f2a44" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <main>
+      <header class="top">
+        <h1>设置路线</h1>
+        <nav><a class="btn" href="/">← 状态</a></nav>
+      </header>
+      <div id="app"><p class="muted">加载中…</p></div>
+      <footer>
+        路线规划：<a href="https://transitous.org/" target="_blank" rel="noopener">Transitous</a>
+        （<a href="https://transitous.org/sources/" target="_blank" rel="noopener">数据来源</a>，
+        地图数据 © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors）。
+        个人非商用通勤工具。
+      </footer>
+    </main>
+    <script type="module" src="/setup.js"></script>
+  </body>
+</html>

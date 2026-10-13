@@ -1,0 +1,20 @@
+{
+  "name": "commute-guard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "通勤哨兵：Alameda ferry + SF Muni commute checks, run by Claude Code routines",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test \"checker/test/*.test.mjs\"",
+    "collect": "node checker/collect.mjs",
+    "publish": "node checker/publish.mjs",
+    "dev": "cd worker && wrangler dev",
+    "deploy": "cd worker && wrangler deploy"
+  },
+  "dependencies": {
+    "gtfs-realtime-bindings": "2.2.0"
+  }
+}

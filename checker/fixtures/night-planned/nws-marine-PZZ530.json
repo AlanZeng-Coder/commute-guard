@@ -1,0 +1,14 @@
+{
+ "properties": {
+  "periods": [
+   {
+    "name": "Tonight",
+    "detailedForecast": "W wind 20 to 30 kt."
+   },
+   {
+    "name": "Wed",
+    "detailedForecast": "W wind 25 to 35 kt with gusts up to 45 kt. Wind waves 3 to 5 ft."
+   }
+  ]
+ }
+}

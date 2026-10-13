@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>通勤哨兵</title>
+    <meta name="theme-color" content="#0f2a44" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="通勤哨兵" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <main>
+      <header class="top">
+        <h1>通勤哨兵</h1>
+        <nav>
+          <button id="refresh" title="刷新">↻ 刷新</button>
+          <a class="btn" href="/setup">路线</a>
+        </nav>
+      </header>
+      <div id="app"><p class="muted">加载中…</p></div>
+      <footer>
+        数据：<a href="https://511.org/open-data/transit">511 SF Bay</a> ·
+        <a href="https://www.weather.gov/">NWS</a> ·
+        路线规划 <a href="https://transitous.org/sources/">Transitous</a>
+      </footer>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

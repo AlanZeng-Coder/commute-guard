@@ -1,0 +1,52 @@
+{
+ "header": {
+  "gtfsRealtimeVersion": "2.0",
+  "timestamp": 1791982800
+ },
+ "entity": [
+  {
+   "id": "sf-elev",
+   "alert": {
+    "activePeriod": [],
+    "informedEntity": [
+     {
+      "agencyId": "SF",
+      "stopId": "16994"
+     }
+    ],
+    "cause": "UNKNOWN_CAUSE",
+    "effect": "ACCESSIBILITY_ISSUE",
+    "headerText": {
+     "translation": [
+      {
+       "text": "Elevator out of service at Civic Center",
+       "language": "en"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "sf-j",
+   "alert": {
+    "activePeriod": [],
+    "informedEntity": [
+     {
+      "agencyId": "SF",
+      "routeId": "J"
+     }
+    ],
+    "cause": "UNKNOWN_CAUSE",
+    "effect": "DETOUR",
+    "headerText": {
+     "translation": [
+      {
+       "text": "J Church: reroute between 30th St and Church St",
+       "language": "en"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

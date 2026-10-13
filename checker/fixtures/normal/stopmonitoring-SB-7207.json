@@ -1,0 +1,36 @@
+{
+ "ServiceDelivery": {
+  "ResponseTimestamp": "2026-10-14T06:00:00-07:00",
+  "ProducerRef": "SF",
+  "Status": true,
+  "StopMonitoringDelivery": {
+   "version": "1.4",
+   "Status": true,
+   "MonitoredStopVisit": [
+    {
+     "RecordedAtTime": "2026-10-14T06:00:00-07:00",
+     "MonitoringRef": "7207",
+     "MonitoredVehicleJourney": {
+      "LineRef": "SEA",
+      "DirectionRef": "OB",
+      "FramedVehicleJourneyRef": {
+       "DataFrameRef": "2026-10-14",
+       "DatedVehicleJourneyRef": "x"
+      },
+      "PublishedLineName": "SEA",
+      "OperatorRef": "SB",
+      "DestinationName": "San Francisco",
+      "Monitored": true,
+      "MonitoredCall": {
+       "StopPointRef": "7207",
+       "AimedArrivalTime": "2026-10-14T07:00:00-07:00",
+       "ExpectedArrivalTime": "2026-10-14T07:01:00-07:00",
+       "AimedDepartureTime": "2026-10-14T07:00:00-07:00",
+       "ExpectedDepartureTime": "2026-10-14T07:01:00-07:00"
+      }
+     }
+    }
+   ]
+  }
+ }
+}

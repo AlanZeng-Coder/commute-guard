@@ -1,0 +1,42 @@
+{
+ "header": {
+  "gtfsRealtimeVersion": "2.0",
+  "timestamp": 1791982800
+ },
+ "entity": [
+  {
+   "id": "sf-n",
+   "alert": {
+    "activePeriod": [
+     {
+      "start": 1791985200
+     }
+    ],
+    "informedEntity": [
+     {
+      "agencyId": "SF",
+      "routeId": "N"
+     }
+    ],
+    "cause": "UNKNOWN_CAUSE",
+    "effect": "NO_SERVICE",
+    "headerText": {
+     "translation": [
+      {
+       "text": "N Judah: No train service between Embarcadero and Duboce Park",
+       "language": "en"
+      }
+     ]
+    },
+    "descriptionText": {
+     "translation": [
+      {
+       "text": "Shuttle buses are running between Embarcadero and Duboce Park. Expect delays of 30+ minutes.",
+       "language": "en"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

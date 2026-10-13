@@ -1,0 +1,4 @@
+APP_PASSCODE=dev-pass
+WRITE_TOKEN=dev-write
+# Leave empty locally so testing doesn't push to your phone
+NTFY_TOPIC=

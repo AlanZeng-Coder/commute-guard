@@ -1,0 +1,43 @@
+{
+ "header": {
+  "gtfsRealtimeVersion": "2.0",
+  "timestamp": 1791982800
+ },
+ "entity": [
+  {
+   "id": "sb-sea-crew",
+   "alert": {
+    "activePeriod": [
+     {
+      "start": 1791979200,
+      "end": 1791997200
+     }
+    ],
+    "informedEntity": [
+     {
+      "agencyId": "SB",
+      "routeId": "SEA"
+     }
+    ],
+    "cause": "TECHNICAL_PROBLEM",
+    "effect": "REDUCED_SERVICE",
+    "headerText": {
+     "translation": [
+      {
+       "text": "Seaplane Lagoon: 7:00am and 7:25am departures cancelled Wednesday",
+       "language": "en"
+      }
+     ]
+    },
+    "descriptionText": {
+     "translation": [
+      {
+       "text": "Due to a crew shortage, the 7:00am and 7:25am Seaplane Lagoon departures to San Francisco are cancelled on Wednesday Oct 14. Riders may take the Main Street Alameda ferry.",
+       "language": "en"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

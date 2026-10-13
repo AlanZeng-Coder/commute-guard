@@ -1,0 +1,15 @@
+{
+ "features": [
+  {
+   "properties": {
+    "event": "Gale Warning",
+    "severity": "Moderate",
+    "headline": "Gale Warning issued October 13",
+    "description": "West winds 25 to 35 kt with gusts up to 45 kt.",
+    "onset": "2026-10-14T03:00:00-07:00",
+    "ends": "2026-10-14T21:00:00-07:00",
+    "areaDesc": "San Francisco Bay South of the Bay Bridge"
+   }
+  }
+ ]
+}

@@ -1,0 +1,82 @@
+{
+ "ServiceDelivery": {
+  "ResponseTimestamp": "2026-10-14T06:00:00-07:00",
+  "ProducerRef": "SF",
+  "Status": true,
+  "StopMonitoringDelivery": {
+   "version": "1.4",
+   "Status": true,
+   "MonitoredStopVisit": [
+    {
+     "RecordedAtTime": "2026-10-14T06:00:00-07:00",
+     "MonitoringRef": "17217",
+     "MonitoredVehicleJourney": {
+      "LineRef": "N",
+      "DirectionRef": "OB",
+      "FramedVehicleJourneyRef": {
+       "DataFrameRef": "2026-10-14",
+       "DatedVehicleJourneyRef": "x"
+      },
+      "PublishedLineName": "N",
+      "OperatorRef": "SF",
+      "DestinationName": "Ocean Beach",
+      "Monitored": true,
+      "MonitoredCall": {
+       "StopPointRef": "17217",
+       "AimedArrivalTime": "2026-10-14T07:31:00-07:00",
+       "ExpectedArrivalTime": "2026-10-14T07:33:00-07:00",
+       "AimedDepartureTime": "2026-10-14T07:31:00-07:00",
+       "ExpectedDepartureTime": "2026-10-14T07:33:00-07:00"
+      }
+     }
+    },
+    {
+     "RecordedAtTime": "2026-10-14T06:00:00-07:00",
+     "MonitoringRef": "17217",
+     "MonitoredVehicleJourney": {
+      "LineRef": "N",
+      "DirectionRef": "OB",
+      "FramedVehicleJourneyRef": {
+       "DataFrameRef": "2026-10-14",
+       "DatedVehicleJourneyRef": "x"
+      },
+      "PublishedLineName": "N",
+      "OperatorRef": "SF",
+      "DestinationName": "Ocean Beach",
+      "Monitored": true,
+      "MonitoredCall": {
+       "StopPointRef": "17217",
+       "AimedArrivalTime": "2026-10-14T07:38:00-07:00",
+       "ExpectedArrivalTime": "2026-10-14T07:40:00-07:00",
+       "AimedDepartureTime": "2026-10-14T07:38:00-07:00",
+       "ExpectedDepartureTime": "2026-10-14T07:40:00-07:00"
+      }
+     }
+    },
+    {
+     "RecordedAtTime": "2026-10-14T06:00:00-07:00",
+     "MonitoringRef": "17217",
+     "MonitoredVehicleJourney": {
+      "LineRef": "KT",
+      "DirectionRef": "OB",
+      "FramedVehicleJourneyRef": {
+       "DataFrameRef": "2026-10-14",
+       "DatedVehicleJourneyRef": "x"
+      },
+      "PublishedLineName": "KT",
+      "OperatorRef": "SF",
+      "DestinationName": "Ocean Beach",
+      "Monitored": true,
+      "MonitoredCall": {
+       "StopPointRef": "17217",
+       "AimedArrivalTime": "2026-10-14T07:30:00-07:00",
+       "ExpectedArrivalTime": "2026-10-14T07:31:00-07:00",
+       "AimedDepartureTime": "2026-10-14T07:30:00-07:00",
+       "ExpectedDepartureTime": "2026-10-14T07:31:00-07:00"
+      }
+     }
+    }
+   ]
+  }
+ }
+}

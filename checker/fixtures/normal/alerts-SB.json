@@ -1,0 +1,35 @@
+{
+ "header": {
+  "gtfsRealtimeVersion": "2.0",
+  "timestamp": 1791982800
+ },
+ "entity": [
+  {
+   "id": "sb-oa",
+   "alert": {
+    "activePeriod": [
+     {
+      "start": 1792220400,
+      "end": 1792393140
+     }
+    ],
+    "informedEntity": [
+     {
+      "agencyId": "SB",
+      "routeId": "OA"
+     }
+    ],
+    "cause": "UNKNOWN_CAUSE",
+    "effect": "MODIFIED_SERVICE",
+    "headerText": {
+     "translation": [
+      {
+       "text": "Oakland & Alameda: schedule change this weekend",
+       "language": "en"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}
