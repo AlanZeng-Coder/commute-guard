@@ -1,0 +1,1055 @@
+{
+ "version": 2,
+ "savedAt": "2026-10-13T14:58:03.379Z",
+ "home": {
+  "label": "37.7795,-122.2925",
+  "lat": 37.7795,
+  "lon": -122.2925
+ },
+ "work": {
+  "label": "500 Parnassus Avenue, San Francisco",
+  "lat": 37.7635601,
+  "lon": -122.4585198
+ },
+ "terminals": [],
+ "schedule": {
+  "nightCheck": "21:30",
+  "days": {
+   "1": {
+    "leaveHome": "06:30",
+    "arriveBy": "08:30",
+    "leaveWork": "17:30"
+   },
+   "2": {
+    "leaveHome": "06:30",
+    "arriveBy": "08:30",
+    "leaveWork": "17:30"
+   },
+   "3": {
+    "leaveHome": "06:30",
+    "arriveBy": "08:30",
+    "leaveWork": "17:30"
+   },
+   "4": {
+    "leaveHome": "06:30",
+    "arriveBy": "08:30",
+    "leaveWork": "17:30"
+   },
+   "5": {
+    "leaveHome": "06:30",
+    "arriveBy": "08:30",
+    "leaveWork": "17:30"
+   }
+  }
+ },
+ "notify": {
+  "night": true,
+  "wake": false,
+  "leave": true,
+  "enroute": true,
+  "offwork": true
+ },
+ "morning": {
+  "pattern": "SB:SEA>N",
+  "byTime": {
+   "06:30": {
+    "primary": {
+     "summary": "⛴ SEA → 🚋 N",
+     "startLocal": "06:40",
+     "endLocal": "07:59",
+     "hasFerry": true,
+     "transfers": 1,
+     "legs": [
+      {
+       "mode": "WALK",
+       "transit": false,
+       "depLocal": "06:40",
+       "arrLocal": "06:55",
+       "durationMin": 15,
+       "from": {
+        "name": "START",
+        "stopId": null,
+        "stopCode": null,
+        "lat": 37.7795,
+        "lon": -122.2925
+       },
+       "to": {
+        "name": "Alameda Seaplane Lagoon Ferry Terminal",
+        "stopId": "7207",
+        "stopCode": "7207",
+        "lat": 37.777170000000005,
+        "lon": -122.29832
+       }
+      },
+      {
+       "mode": "FERRY",
+       "transit": true,
+       "depLocal": "07:00",
+       "arrLocal": "07:20",
+       "durationMin": 20,
+       "from": {
+        "name": "Alameda Seaplane Lagoon Ferry Terminal",
+        "stopId": "7207",
+        "stopCode": "7207",
+        "lat": 37.777170000000005,
+        "lon": -122.29832
+       },
+       "to": {
+        "name": "San Francisco Ferry Terminal",
+        "stopId": "72012",
+        "stopCode": "72012",
+        "lat": 37.79439000000001,
+        "lon": -122.39093
+       },
+       "agencyId": "SB",
+       "agencyName": "San Francisco Bay Ferry",
+       "routeId": "SB:SEA",
+       "routeShortName": "SEA",
+       "routeLongName": "Alameda Seaplane",
+       "routeColor": "df7a1c",
+       "headsign": "South San Francisco Ferry Terminal",
+       "tripId": "SB:t_6144183_b_86948_tn_0"
+      },
+      {
+       "mode": "WALK",
+       "transit": false,
+       "depLocal": "07:20",
+       "arrLocal": "07:27",
+       "durationMin": 7,
+       "from": {
+        "name": "San Francisco Ferry Terminal",
+        "stopId": "72012",
+        "stopCode": "72012",
+        "lat": 37.79439000000001,
+        "lon": -122.39093
+       },
+       "to": {
+        "name": "Metro Embarcadero Station",
+        "stopId": "17217",
+        "stopCode": "17217",
+        "lat": 37.792710000000014,
+        "lon": -122.39715000000001
+       }
+      },
+      {
+       "mode": "TRAM",
+       "transit": true,
+       "depLocal": "07:37",
+       "arrLocal": "07:55",
+       "durationMin": 18,
+       "from": {
+        "name": "Metro Embarcadero Station",
+        "stopId": "17217",
+        "stopCode": "17217",
+        "lat": 37.792710000000014,
+        "lon": -122.39715000000001
+       },
+       "to": {
+        "name": "Irving St & 2nd Ave",
+        "stopId": "15118",
+        "stopCode": "15118",
+        "lat": 37.764442,
+        "lon": -122.45864
+       },
+       "agencyId": "SF",
+       "agencyName": "San Francisco Municipal Transportation Agency",
+       "routeId": "N",
+       "routeShortName": "N",
+       "routeLongName": "JUDAH",
+       "routeColor": "005b95",
+       "headsign": "Ocean Beach",
+       "tripId": "12135844_M11"
+      },
+      {
+       "mode": "WALK",
+       "transit": false,
+       "depLocal": "07:55",
+       "arrLocal": "07:59",
+       "durationMin": 4,
+       "from": {
+        "name": "Irving St & 2nd Ave",
+        "stopId": "15118",
+        "stopCode": "15118",
+        "lat": 37.764442,
+        "lon": -122.45864
+       },
+       "to": {
+        "name": "END",
+        "stopId": null,
+        "stopCode": null,
+        "lat": 37.7635601,
+        "lon": -122.4585198
+       }
+      }
+     ],
+     "durationMin": 79
+    },
+    "alternatives": [
+     {
+      "summary": "⛴ SEA → 🚋 N",
+      "startLocal": "07:05",
+      "endLocal": "08:22",
+      "hasFerry": true,
+      "transfers": 1,
+      "legs": [
+       {
+        "mode": "WALK",
+        "transit": false,
+        "depLocal": "07:05",
+        "arrLocal": "07:20",
+        "durationMin": 15,
+        "from": {
+         "name": "START",
+         "stopId": null,
+         "stopCode": null,
+         "lat": 37.7795,
+         "lon": -122.2925
+        },
+        "to": {
+         "name": "Alameda Seaplane Lagoon Ferry Terminal",
+         "stopId": "7207",
+         "stopCode": "7207",
+         "lat": 37.777170000000005,
+         "lon": -122.29832
+        }
+       },
+       {
+        "mode": "FERRY",
+        "transit": true,
+        "depLocal": "07:25",
+        "arrLocal": "07:45",
+        "durationMin": 20,
+        "from": {
+         "name": "Alameda Seaplane Lagoon Ferry Terminal",
+         "stopId": "7207",
+         "stopCode": "7207",
+         "lat": 37.777170000000005,
+         "lon": -122.29832
+        },
+        "to": {
+         "name": "San Francisco Ferry Terminal",
+         "stopId": "72013",
+         "stopCode": "72013",
+         "lat": 37.794760000000004,
+         "lon": -122.39125000000001
+        },
+        "agencyId": "SB",
+        "agencyName": "San Francisco Bay Ferry",
+        "routeId": "SB:SEA",
+        "routeShortName": "SEA",
+        "routeLongName": "Alameda Seaplane",
+        "routeColor": "df7a1c",
+        "headsign": "San Francisco Ferry Terminal",
+        "tripId": "SB:t_6144292_b_86948_tn_0"
+       },
+       {
+        "mode": "WALK",
+        "transit": false,
+        "depLocal": "07:45",
+        "arrLocal": "07:51",
+        "durationMin": 6,
+        "from": {
+         "name": "San Francisco Ferry Terminal",
+         "stopId": "72013",
+         "stopCode": "72013",
+         "lat": 37.794760000000004,
+         "lon": -122.39125000000001
+        },
+        "to": {
+         "name": "Metro Embarcadero Station",
+         "stopId": "17217",
+         "stopCode": "17217",
+         "lat": 37.792710000000014,
+         "lon": -122.39715000000001
+        }
+       },
+       {
+        "mode": "TRAM",
+        "transit": true,
+        "depLocal": "08:00",
+        "arrLocal": "08:18",
+        "durationMin": 18,
+        "from": {
+         "name": "Metro Embarcadero Station",
+         "stopId": "17217",
+         "stopCode": "17217",
+         "lat": 37.792710000000014,
+         "lon": -122.39715000000001
+        },
+        "to": {
+         "name": "Irving St & 2nd Ave",
+         "stopId": "15118",
+         "stopCode": "15118",
+         "lat": 37.764442,
+         "lon": -122.45864
+        },
+        "agencyId": "SF",
+        "agencyName": "San Francisco Municipal Transportation Agency",
+        "routeId": "N",
+        "routeShortName": "N",
+        "routeLongName": "JUDAH",
+        "routeColor": "005b95",
+        "headsign": "Ocean Beach",
+        "tripId": "12135846_M11"
+       },
+       {
+        "mode": "WALK",
+        "transit": false,
+        "depLocal": "08:18",
+        "arrLocal": "08:22",
+        "durationMin": 4,
+        "from": {
+         "name": "Irving St & 2nd Ave",
+         "stopId": "15118",
+         "stopCode": "15118",
+         "lat": 37.764442,
+         "lon": -122.45864
+        },
+        "to": {
+         "name": "END",
+         "stopId": null,
+         "stopCode": null,
+         "lat": 37.7635601,
+         "lon": -122.4585198
+        }
+       }
+      ],
+      "durationMin": 77
+     },
+     {
+      "summary": "🚌 96 → 🚌 72L → ⛴ OA → 🚋 N",
+      "startLocal": "06:49",
+      "endLocal": "08:33",
+      "hasFerry": true,
+      "transfers": 3,
+      "legs": [
+       {
+        "mode": "WALK",
+        "transit": false,
+        "depLocal": "06:49",
+        "arrLocal": "06:54",
+        "durationMin": 5,
+        "from": {
+         "name": "START",
+         "stopId": null,
+         "stopCode": null,
+         "lat": 37.7795,
+         "lon": -122.2925
+        },
+        "to": {
+         "name": "Ralph Appezzato Memorial Pkwy & Main St",
+         "stopId": "52665",
+         "stopCode": "52665",
+         "lat": 37.77989,
+         "lon": -122.29077
+        }
+       },
+       {
+        "mode": "BUS",
+        "transit": true,
+        "depLocal": "06:54",
+        "arrLocal": "07:13",
+        "durationMin": 19,
+        "from": {
+         "name": "Ralph Appezzato Memorial Pkwy & Main St",
+         "stopId": "52665",
+         "stopCode": "52665",
+         "lat": 37.77989,
+         "lon": -122.29077
+        },
+        "to": {
+         "name": "Broadway & 11th St (12th St BART)",
+         "stopId": "52999",
+         "stopCode": "52999",
+         "lat": 37.80208,
+         "lon": -122.27244999999999
+        },
+        "agencyId": "AC",
+        "agencyName": "AC TRANSIT",
+        "routeId": "AC:96",
+        "routeShortName": "96",
+        "routeLongName": "Alameda Pt. - 14th Ave. - Dimond",
+        "routeColor": "2b589c",
+        "headsign": "Dimond District",
+        "tripId": "AC:425020"
+       },
+       {
+        "mode": "WALK",
+        "transit": false,
+        "depLocal": "07:13",
+        "arrLocal": "07:15",
+        "durationMin": 2,
+        "from": {
+         "name": "Broadway & 11th St (12th St BART)",
+         "stopId": "52999",
+         "stopCode": "52999",
+         "lat": 37.80208,
+         "lon": -122.27244999999999
+        },
+        "to": {
+         "name": "Broadway & 12th St (12th St BART)",
+         "stopId": "55222",
+         "stopCode": "55222",
+         "lat": 37.80265,
+         "lon": -122.27239999999999
+        }
+       },
+       {
+        "mode": "BUS",
+        "transit": true,
+        "depLocal": "07:20",
+        "arrLocal": "07:24",
+        "durationMin": 4,
+        "from": {
+         "name": "Broadway & 12th St (12th St BART)",
+         "stopId": "55222",
+         "stopCode": "55222",
+         "lat": 37.80265,
+         "lon": -122.27239999999999
+        },
+        "to": {
+         "name": "2nd St & Washington St",
+         "stopId": "51632",
+         "stopCode": "51632",
+         "lat": 37.79657000000001,
+         "lon": -122.27785
+        },
+        "agencyId": "AC",
+        "agencyName": "AC TRANSIT",
+        "routeId": "AC:72L",
+        "routeShortName": "72L",
+        "routeLongName": "San Pablo Limited",
+        "routeColor": "2b589c",
+        "headsign": "Jack London Square",
+        "tripId": "AC:13666020"
+       },
+       {
+        "mode": "WALK",
+        "transit": false,
+        "depLocal": "07:24",
+        "arrLocal": "07:29",
+        "durationMin": 5,
+        "from": {
+         "name": "2nd St & Washington St",
+         "stopId": "51632",
+         "stopCode": "51632",
+         "lat": 37.79657000000001,
+         "lon": -122.27785
+        },
+        "to": {
+         "name": "Oakland Ferry Terminal",
+         "stopId": "7209",
+         "stopCode": null,
+         "lat": 37.79509000000001,
+         "lon": -122.27976
+        }
+       },
+       {
+        "mode": "FERRY",
+        "transit": true,
+        "depLocal": "07:35",
+        "arrLocal": "08:00",
+        "durationMin": 25,
+        "from": {
+         "name": "Oakland Ferry Terminal",
+         "stopId": "7209",
+         "stopCode": "7209",
+         "lat": 37.79509000000001,
+         "lon": -122.27976
+        },
+        "to": {
+         "name": "San Francisco Ferry Terminal",
+         "stopId": "72012",
+         "stopCode": "72012",
+         "lat": 37.79439000000001,
+         "lon": -122.39093
+        },
+        "agencyId": "SB",
+        "agencyName": "San Francisco Bay Ferry",
+        "routeId": "SB:OA",
+        "routeShortName": "OA",
+        "routeLongName": "Oakland & Alameda",
+        "routeColor": "4fab47",
+        "headsign": "San Francisco Ferry Terminal",
+        "tripId": "SB:t_6144266_b_86948_tn_0"
+       },
+       {
+        "mode": "WALK",
+        "transit": false,
+        "depLocal": "08:00",
+        "arrLocal": "08:07",
+        "durationMin": 7,
+        "from": {
+         "name": "San Francisco Ferry Terminal",
+         "stopId": "72012",
+         "stopCode": "72012",
+         "lat": 37.79439000000001,
+         "lon": -122.39093
+        },
+        "to": {
+         "name": "Metro Embarcadero Station",
+         "stopId": "17217",
+         "stopCode": "17217",
+         "lat": 37.792710000000014,
+         "lon": -122.39715000000001
+        }
+       },
+       {
+        "mode": "TRAM",
+        "transit": true,
+        "depLocal": "08:11",
+        "arrLocal": "08:29",
+        "durationMin": 18,
+        "from": {
+         "name": "Metro Embarcadero Station",
+         "stopId": "17217",
+         "stopCode": "17217",
+         "lat": 37.792710000000014,
+         "lon": -122.39715000000001
+        },
+        "to": {
+         "name": "Irving St & 2nd Ave",
+         "stopId": "15118",
+         "stopCode": "15118",
+         "lat": 37.764442,
+         "lon": -122.45864
+        },
+        "agencyId": "SF",
+        "agencyName": "San Francisco Municipal Transportation Agency",
+        "routeId": "N",
+        "routeShortName": "N",
+        "routeLongName": "JUDAH",
+        "routeColor": "005b95",
+        "headsign": "Ocean Beach",
+        "tripId": "12135848_M11"
+       },
+       {
+        "mode": "WALK",
+        "transit": false,
+        "depLocal": "08:29",
+        "arrLocal": "08:33",
+        "durationMin": 4,
+        "from": {
+         "name": "Irving St & 2nd Ave",
+         "stopId": "15118",
+         "stopCode": "15118",
+         "lat": 37.764442,
+         "lon": -122.45864
+        },
+        "to": {
+         "name": "END",
+         "stopId": null,
+         "stopCode": null,
+         "lat": 37.7635601,
+         "lon": -122.4585198
+        }
+       }
+      ],
+      "durationMin": 104
+     },
+     {
+      "summary": "🚌 96 → 🚇 Yellow-S → 🚋 N",
+      "startLocal": "06:49",
+      "endLocal": "07:59",
+      "hasFerry": false,
+      "transfers": 2,
+      "legs": [
+       {
+        "mode": "WALK",
+        "transit": false,
+        "depLocal": "06:49",
+        "arrLocal": "06:54",
+        "durationMin": 5,
+        "from": {
+         "name": "START",
+         "stopId": null,
+         "stopCode": null,
+         "lat": 37.7795,
+         "lon": -122.2925
+        },
+        "to": {
+         "name": "Ralph Appezzato Memorial Pkwy & Main St",
+         "stopId": "52665",
+         "stopCode": "52665",
+         "lat": 37.77989,
+         "lon": -122.29077
+        }
+       },
+       {
+        "mode": "BUS",
+        "transit": true,
+        "depLocal": "06:54",
+        "arrLocal": "07:13",
+        "durationMin": 19,
+        "from": {
+         "name": "Ralph Appezzato Memorial Pkwy & Main St",
+         "stopId": "52665",
+         "stopCode": "52665",
+         "lat": 37.77989,
+         "lon": -122.29077
+        },
+        "to": {
+         "name": "Broadway & 11th St (12th St BART)",
+         "stopId": "52999",
+         "stopCode": "52999",
+         "lat": 37.80208,
+         "lon": -122.27244999999999
+        },
+        "agencyId": "AC",
+        "agencyName": "AC TRANSIT",
+        "routeId": "AC:96",
+        "routeShortName": "96",
+        "routeLongName": "Alameda Pt. - 14th Ave. - Dimond",
+        "routeColor": "2b589c",
+        "headsign": "Dimond District",
+        "tripId": "AC:425020"
+       },
+       {
+        "mode": "WALK",
+        "transit": false,
+        "depLocal": "07:13",
+        "arrLocal": "07:17",
+        "durationMin": 4,
+        "from": {
+         "name": "Broadway & 11th St (12th St BART)",
+         "stopId": "52999",
+         "stopCode": "52999",
+         "lat": 37.80208,
+         "lon": -122.27244999999999
+        },
+        "to": {
+         "name": "12th St Oakland City Center BART",
+         "stopId": "900102",
+         "stopCode": "900102",
+         "lat": 37.80358,
+         "lon": -122.27159
+        }
+       },
+       {
+        "mode": "SUBWAY",
+        "transit": true,
+        "depLocal": "07:20",
+        "arrLocal": "07:31",
+        "durationMin": 11,
+        "from": {
+         "name": "12th St Oakland City Center BART",
+         "stopId": "900102",
+         "stopCode": "900102",
+         "lat": 37.80358,
+         "lon": -122.27159
+        },
+        "to": {
+         "name": "Embarcadero BART",
+         "stopId": "901161",
+         "stopCode": "901161",
+         "lat": 37.79279000000001,
+         "lon": -122.39708
+        },
+        "agencyId": "BA",
+        "agencyName": "Bay Area Rapid Transit",
+        "routeId": "BA:Yellow-S",
+        "routeShortName": "Yellow-S",
+        "routeLongName": "Antioch to SF Int'l Airport SFO/Millbrae",
+        "routeColor": "ffff33",
+        "headsign": "San Francisco International Airport",
+        "tripId": "BA:1965126"
+       },
+       {
+        "mode": "WALK",
+        "transit": false,
+        "depLocal": "07:31",
+        "arrLocal": "07:33",
+        "durationMin": 2,
+        "from": {
+         "name": "Embarcadero BART",
+         "stopId": "901161",
+         "stopCode": "901161",
+         "lat": 37.79279000000001,
+         "lon": -122.39708
+        },
+        "to": {
+         "name": "Metro Embarcadero Station",
+         "stopId": "17217",
+         "stopCode": "17217",
+         "lat": 37.792710000000014,
+         "lon": -122.39715000000001
+        }
+       },
+       {
+        "mode": "TRAM",
+        "transit": true,
+        "depLocal": "07:37",
+        "arrLocal": "07:55",
+        "durationMin": 18,
+        "from": {
+         "name": "Metro Embarcadero Station",
+         "stopId": "17217",
+         "stopCode": "17217",
+         "lat": 37.792710000000014,
+         "lon": -122.39715000000001
+        },
+        "to": {
+         "name": "Irving St & 2nd Ave",
+         "stopId": "15118",
+         "stopCode": "15118",
+         "lat": 37.764442,
+         "lon": -122.45864
+        },
+        "agencyId": "SF",
+        "agencyName": "San Francisco Municipal Transportation Agency",
+        "routeId": "N",
+        "routeShortName": "N",
+        "routeLongName": "JUDAH",
+        "routeColor": "005b95",
+        "headsign": "Ocean Beach",
+        "tripId": "12135844_M11"
+       },
+       {
+        "mode": "WALK",
+        "transit": false,
+        "depLocal": "07:55",
+        "arrLocal": "07:59",
+        "durationMin": 4,
+        "from": {
+         "name": "Irving St & 2nd Ave",
+         "stopId": "15118",
+         "stopCode": "15118",
+         "lat": 37.764442,
+         "lon": -122.45864
+        },
+        "to": {
+         "name": "END",
+         "stopId": null,
+         "stopCode": null,
+         "lat": 37.7635601,
+         "lon": -122.4585198
+        }
+       }
+      ],
+      "durationMin": 70
+     },
+     {
+      "summary": "🚌 19 → 🚇 Red-S → 🚋 N",
+      "startLocal": "07:32",
+      "endLocal": "08:33",
+      "hasFerry": false,
+      "transfers": 2,
+      "legs": [
+       {
+        "mode": "WALK",
+        "transit": false,
+        "depLocal": "07:32",
+        "arrLocal": "07:37",
+        "durationMin": 5,
+        "from": {
+         "name": "START",
+         "stopId": null,
+         "stopCode": null,
+         "lat": 37.7795,
+         "lon": -122.2925
+        },
+        "to": {
+         "name": "Ralph Appezzato Memorial Pkwy & Main St",
+         "stopId": "52665",
+         "stopCode": "52665",
+         "lat": 37.77989,
+         "lon": -122.29077
+        }
+       },
+       {
+        "mode": "BUS",
+        "transit": true,
+        "depLocal": "07:37",
+        "arrLocal": "07:48",
+        "durationMin": 11,
+        "from": {
+         "name": "Ralph Appezzato Memorial Pkwy & Main St",
+         "stopId": "52665",
+         "stopCode": "52665",
+         "lat": 37.77989,
+         "lon": -122.29077
+        },
+        "to": {
+         "name": "12th St & Broadway (12th St BART)",
+         "stopId": "55557",
+         "stopCode": "55557",
+         "lat": 37.80321,
+         "lon": -122.27248999999999
+        },
+        "agencyId": "AC",
+        "agencyName": "AC TRANSIT",
+        "routeId": "AC:19",
+        "routeShortName": "19",
+        "routeLongName": "Alameda Pt-Buena Vista-Fruitvale",
+        "routeColor": "07b5d0",
+        "headsign": "Downtown Oakland",
+        "tripId": "AC:5322020"
+       },
+       {
+        "mode": "WALK",
+        "transit": false,
+        "depLocal": "07:48",
+        "arrLocal": "07:50",
+        "durationMin": 2,
+        "from": {
+         "name": "12th St & Broadway (12th St BART)",
+         "stopId": "55557",
+         "stopCode": "55557",
+         "lat": 37.80321,
+         "lon": -122.27248999999999
+        },
+        "to": {
+         "name": "12th St Oakland City Center BART",
+         "stopId": "900102",
+         "stopCode": "900102",
+         "lat": 37.80358,
+         "lon": -122.27159
+        }
+       },
+       {
+        "mode": "SUBWAY",
+        "transit": true,
+        "depLocal": "07:56",
+        "arrLocal": "08:07",
+        "durationMin": 11,
+        "from": {
+         "name": "12th St Oakland City Center BART",
+         "stopId": "900102",
+         "stopCode": "900102",
+         "lat": 37.80358,
+         "lon": -122.27159
+        },
+        "to": {
+         "name": "Embarcadero BART",
+         "stopId": "901161",
+         "stopCode": "901161",
+         "lat": 37.79279000000001,
+         "lon": -122.39708
+        },
+        "agencyId": "BA",
+        "agencyName": "Bay Area Rapid Transit",
+        "routeId": "BA:Red-S",
+        "routeShortName": "Red-S",
+        "routeLongName": "Richmond to SF Int'l Airport SFO/Millbrae",
+        "routeColor": "ff0000",
+        "headsign": "Millbrae",
+        "tripId": "BA:1965631"
+       },
+       {
+        "mode": "WALK",
+        "transit": false,
+        "depLocal": "08:07",
+        "arrLocal": "08:09",
+        "durationMin": 2,
+        "from": {
+         "name": "Embarcadero BART",
+         "stopId": "901161",
+         "stopCode": "901161",
+         "lat": 37.79279000000001,
+         "lon": -122.39708
+        },
+        "to": {
+         "name": "Metro Embarcadero Station",
+         "stopId": "17217",
+         "stopCode": "17217",
+         "lat": 37.792710000000014,
+         "lon": -122.39715000000001
+        }
+       },
+       {
+        "mode": "TRAM",
+        "transit": true,
+        "depLocal": "08:11",
+        "arrLocal": "08:29",
+        "durationMin": 18,
+        "from": {
+         "name": "Metro Embarcadero Station",
+         "stopId": "17217",
+         "stopCode": "17217",
+         "lat": 37.792710000000014,
+         "lon": -122.39715000000001
+        },
+        "to": {
+         "name": "Irving St & 2nd Ave",
+         "stopId": "15118",
+         "stopCode": "15118",
+         "lat": 37.764442,
+         "lon": -122.45864
+        },
+        "agencyId": "SF",
+        "agencyName": "San Francisco Municipal Transportation Agency",
+        "routeId": "N",
+        "routeShortName": "N",
+        "routeLongName": "JUDAH",
+        "routeColor": "005b95",
+        "headsign": "Ocean Beach",
+        "tripId": "12135848_M11"
+       },
+       {
+        "mode": "WALK",
+        "transit": false,
+        "depLocal": "08:29",
+        "arrLocal": "08:33",
+        "durationMin": 4,
+        "from": {
+         "name": "Irving St & 2nd Ave",
+         "stopId": "15118",
+         "stopCode": "15118",
+         "lat": 37.764442,
+         "lon": -122.45864
+        },
+        "to": {
+         "name": "END",
+         "stopId": null,
+         "stopCode": null,
+         "lat": 37.7635601,
+         "lon": -122.4585198
+        }
+       }
+      ],
+      "durationMin": 61
+     }
+    ]
+   }
+  }
+ },
+ "evening": {
+  "pattern": "N>SB:SEA",
+  "byTime": {
+   "17:30": {
+    "primary": {
+     "summary": "🚋 N → ⛴ SEA",
+     "startLocal": "17:30",
+     "endLocal": "18:45",
+     "hasFerry": true,
+     "transfers": 1,
+     "legs": [
+      {
+       "mode": "WALK",
+       "transit": false,
+       "depLocal": "17:30",
+       "arrLocal": "17:34",
+       "durationMin": 0,
+       "from": {
+        "name": "START",
+        "stopId": null,
+        "stopCode": null,
+        "lat": 37.7635601,
+        "lon": -122.4585198
+       },
+       "to": {
+        "name": "Irving St & 2nd Ave",
+        "stopId": "15117",
+        "stopCode": "15117",
+        "lat": 37.76452,
+        "lon": -122.45858
+       }
+      },
+      {
+       "mode": "TRAM",
+       "transit": true,
+       "depLocal": "17:40",
+       "arrLocal": "17:58",
+       "durationMin": 18,
+       "from": {
+        "name": "Irving St & 2nd Ave",
+        "stopId": "15117",
+        "stopCode": "15117",
+        "lat": 37.76452,
+        "lon": -122.45858
+       },
+       "to": {
+        "name": "Metro Embarcadero Station/Inbound",
+        "stopId": "16992",
+        "stopCode": "16992",
+        "lat": 37.79286,
+        "lon": -122.39702
+       },
+       "agencyId": "SF",
+       "agencyName": "San Francisco Municipal Transportation Agency",
+       "routeId": "N",
+       "routeShortName": "N",
+       "routeLongName": "Judah",
+       "routeColor": "005b95",
+       "headsign": "Caltrain/Ballpark",
+       "tripId": "12135990_M11"
+      },
+      {
+       "mode": "WALK",
+       "transit": false,
+       "depLocal": "17:58",
+       "arrLocal": "18:05",
+       "durationMin": 0,
+       "from": {
+        "name": "Metro Embarcadero Station/Inbound",
+        "stopId": "16992",
+        "stopCode": "16992",
+        "lat": 37.79286,
+        "lon": -122.39702
+       },
+       "to": {
+        "name": "San Francisco Ferry Terminal",
+        "stopId": "72012",
+        "stopCode": "72012",
+        "lat": 37.79439000000001,
+        "lon": -122.39093
+       }
+      },
+      {
+       "mode": "FERRY",
+       "transit": true,
+       "depLocal": "18:15",
+       "arrLocal": "18:35",
+       "durationMin": 20,
+       "from": {
+        "name": "San Francisco Ferry Terminal",
+        "stopId": "72012",
+        "stopCode": "72012",
+        "lat": 37.79439000000001,
+        "lon": -122.39093
+       },
+       "to": {
+        "name": "Alameda Seaplane Lagoon Ferry Terminal",
+        "stopId": "7207",
+        "stopCode": "7207",
+        "lat": 37.777170000000005,
+        "lon": -122.29832
+       },
+       "agencyId": "SB",
+       "agencyName": "San Francisco Bay Ferry",
+       "routeId": "SB:SEA",
+       "routeShortName": "SEA",
+       "routeLongName": "Alameda Seaplane",
+       "routeColor": "df7a1c",
+       "headsign": "Alameda Seaplane Lagoon Ferry Terminal",
+       "tripId": "SB:t_6144201_b_86948_tn_0"
+      },
+      {
+       "mode": "WALK",
+       "transit": false,
+       "depLocal": "18:35",
+       "arrLocal": "18:45",
+       "durationMin": 0,
+       "from": {
+        "name": "Alameda Seaplane Lagoon Ferry Terminal",
+        "stopId": "7207",
+        "stopCode": "7207",
+        "lat": 37.777170000000005,
+        "lon": -122.29832
+       },
+       "to": {
+        "name": "END",
+        "stopId": null,
+        "stopCode": null,
+        "lat": 37.7795,
+        "lon": -122.2925
+       }
+      }
+     ],
+     "durationMin": 75
+    },
+    "alternatives": []
+   }
+  }
+ }
+}

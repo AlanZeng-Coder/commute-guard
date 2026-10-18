@@ -1,86 +1,100 @@
 # 通勤哨兵 (Commute Guard)
 
-Alameda → SF（渡轮 + Muni）通勤预警。每个工作日在 4 个时间点检查你的路线，有问题推送到手机：
+Alameda ⇄ SF（渡轮 + Muni）通勤预警，装在 iPhone 主屏幕上的 App。按你**每天自己的时间**盯着你的路线：
 
-| 检查 | 时间 | 回答 |
+- **通勤时每 10 分钟查一次 511**：你那班船取消/晚点、Muni 停运、可能迟到 → 马上推送；问题恢复了也推一条「✅ 已恢复」。
+- **关键时间点由 Claude 用中文分析**：影不影响你、坐哪一班、几点到、Plan B 怎么走。
+- **晚上回家也管**：下班前检查回程，回程路上同样每 10 分钟查。
+
+| 检查 | 什么时候（按你当天的时间算） | 回答 |
 |---|---|---|
-| 睡前检查 | 前一晚 21:30 | 明天要不要定早闹钟？ |
-| 起床检查 | 05:37 | 要不要起来准备？ |
-| 出门检查 | 06:17 | 要不要出门？ |
-| 船上检查 | 06:57 | 到 SF 后 Muni 能不能坐？不能的话 Plan B |
+| 睡前检查 | 前一晚 21:30（可改） | 明天要不要定早闹钟？ |
+| 起床检查 | 出门前 50 分钟 | 要不要起来准备？ |
+| 出门检查 | 出门前 15 分钟 | 要不要出门？坐哪班、几点到？ |
+| 船上检查 | 上船后 10 分钟 | 到 SF 后 Muni 能不能坐？不能的话 Plan B |
+| 下班检查 | 下班前 30 分钟 | 回家的路通不通？ |
+| 突发分析 | 10 分钟巡查发现新问题时 | 影响多大、现在怎么走 |
 
-结论分 🟢 正常 / 🟡 注意 / 🔴 别去（附 Plan B）。如果某次检查到点没出结果，会另外推一条「⚠️ 检查没有运行」——没消息不代表没问题。
+结论分 🟢 正常 / 🟡 注意 / 🔴 别去（附 Plan B）。Claude 15 分钟内没给出结果，Worker 会推送自己按规则做的自动检查结果——没消息不代表没问题。
 
 ## 架构
 
 ```
-手机 ntfy App ◀── 推送 ──┐
-PWA 网站（状态/设置路线）│
-        ▲               │
-        │      Cloudflare Worker + KV（存路线、存结果、推送、看门狗 cron）
-        │               ▲
-        │               │ POST 结果
-  Transitous（设置路线时   Claude Code routines ×4（云端定时）
-  在浏览器里规划）         ├─ checker/collect.mjs：拉 511 + NWS，对上你的路线 → digest.json
-                          ├─ Claude 读 digest，按 routine/PROMPT.md 判断 → verdict.json
-                          └─ checker/publish.mjs：写回 Worker（Worker 负责推送）
+iPhone 主屏幕「通勤哨兵」(PWA) ◀──── Web Push 通知 ────┐
+   │ 看状态 / 设时间 / 设路线                            │
+   ▼                                                    │
+Cloudflare Worker + KV（cron 每 5 分钟）─────────────────┘
+   ├─ 通勤时段：每 10 分钟拉 511 → 新问题 / 更严重 / 已恢复 → 立刻推送
+   ├─ 到检查点、或发现新问题 → 叫醒 Claude routine（API 触发）
+   ├─ Claude 没按时回 → 推送自动检查结果
+   └─ 每晚按明天的时间用 Transitous 重新排班次
+                │ fire
+                ▼
+Claude Code routine（只有 API 触发）
+   ├─ checker/collect.mjs --remote：从 Worker 拿整理好的数据（digest）
+   ├─ Claude 按 routine/PROMPT.md 判断 → verdict.json
+   └─ checker/publish.mjs：写回 Worker → 推送到手机
 ```
 
-全部免费：511.org、NWS、Transitous、ntfy、Cloudflare Workers 免费额度；routine 用你 Claude 订阅的额度。
+全部免费：511.org、NWS、Transitous、Cloudflare Workers 免费额度、Web Push；routine 用你 Claude 订阅的额度。
 
-## 部署（一次性）
+## 部署（一次性，约 20 分钟）
 
-1. **511 token**：<https://511.org/open-data/token> 填邮箱，几分钟后收到。
-2. **手机装 ntfy**（App Store / Google Play）。
-3. **部署 Worker**：
+1. **511 token**：<https://511.org/open-data/token> 填邮箱，几分钟后收到。写进 `.env`：`API_511_KEY=...`
+2. **部署 Worker**：
    ```bash
    npm install
    wrangler login                       # 浏览器里授权 Cloudflare
-   bash scripts/setup-cloudflare.sh     # 建 KV、生成密码/密钥、部署
+   bash scripts/setup-cloudflare.sh     # 建 KV、生成密码和推送密钥、部署
    ```
-   脚本最后会打印网站地址、访问密码、ntfy topic（也存在 `.env`，不进 git）。在 ntfy App 里订阅这个 topic。
-4. **设置路线**：打开网站 → 输入访问密码 → 「路线」→ 输入家和公司地址 → 选你实际走的那条 → 保存。回首页点「发送测试通知」，确认手机收到。
-   iPhone：Safari 打开网站 → 分享 → 「添加到主屏幕」，之后就像 App 一样用。
-5. **推到 GitHub**（routine 需要从 GitHub 拉代码）。
-6. **建云端环境**：<https://claude.ai/code> → 环境设置 → 新建环境 `commute-guard`：
-   - Network access：**Custom**，Allowed domains 填 `api.511.org`、`api.weather.gov`，勾选 *Also include default list of common package managers*（要装 npm 包）
-   - Environment variables：
-     ```
-     API_511_KEY=<你的 511 token>
-     CG_BASE_URL=<网站地址，例如 https://commute-guard.xxx.workers.dev>
-     ```
-   - Network secrets → Add secret：Allowed websites 填网站的域名（如 `commute-guard.xxx.workers.dev`），Header `Authorization`、Prefix `Bearer`、Value 填 `.env` 里的 `CG_WRITE_TOKEN`
-7. **建 4 个 routine**（<https://claude.ai/code/routines> 或 CLI 里 `/schedule`），每个都选这个 repo、`commute-guard` 环境、模型选 Sonnet，**去掉所有 connectors**：
-
-   | 名字 | 触发 | Prompt |
-   |---|---|---|
-   | 通勤-睡前 | 每天 21:30 | `按照仓库里 routine/PROMPT.md 执行一次通勤检查，MODE=night。` |
-   | 通勤-起床 | 工作日 05:37 | `按照仓库里 routine/PROMPT.md 执行一次通勤检查，MODE=wake。` |
-   | 通勤-出门 | 工作日 06:17 | `按照仓库里 routine/PROMPT.md 执行一次通勤检查，MODE=leave。` |
-   | 通勤-船上 | 工作日 06:57 | `按照仓库里 routine/PROMPT.md 执行一次通勤检查，MODE=enroute。` |
-
-   睡前检查设成「每天」：周五、周六晚上它会自己跳过（明天不是通勤日），这样不用写自定义 cron。时间不要设整点（整点可能晚几分钟启动）。如果改了时间，同步改 `shared/schedule.mjs` 里的时间，看门狗靠它判断「没运行」。
-8. 每个 routine 点 **Run now**，看运行记录、手机推送、网站时间线是否都对。
+   脚本最后打印网站地址和访问密码（也存在 `.env`，不进 git）。
+3. **装到 iPhone**（iOS 16.4 以上）：Safari 打开网站 → 输入访问密码 → 分享 → **添加到主屏幕** → **从主屏幕的图标打开** → 点「开启通知」→ 允许。会收到一条测试通知。
+   建议到 iPhone「设置 → 专注模式」把通勤哨兵加进允许的 App，否则专注模式下不会响。
+4. **设置**：App 右上角「设置」→ 家和公司地址 → 每天的出门 / 最晚到 / 下班时间 → 选去程路线 → 选回程路线 → 保存。
+5. **Claude routine**（让通知带中文分析和 Plan B；不做这步也能用，只是推送自动检查结果）：
+   1. 代码推到 GitHub（routine 从 GitHub 拉代码）。
+   2. <https://claude.ai/code> → 环境设置 → 新建环境 `commute-guard`：
+      - Network access：**Custom**，Allowed domains 只填网站域名（如 `commute-guard.xxx.workers.dev`）
+      - Environment variables：`CG_BASE_URL=<网站地址>`
+      - Network secrets → Add secret：Allowed websites 填网站域名，Header `Authorization`、Prefix `Bearer`、Value 填 `.env` 里的 `CG_WRITE_TOKEN`
+   3. <https://claude.ai/code/routines> 新建 routine：选这个 repo、`commute-guard` 环境、模型 Sonnet，**去掉所有 connectors**，**不要加定时**，Prompt：
+      ```
+      按照仓库里 routine/PROMPT.md 执行一次通勤检查。参数（MODE / DATE / DIR / REASON）在 <routine-fire-payload> 里。
+      ```
+   4. 在这个 routine 上 **Add API trigger**，复制 URL 里的 routine id（`trig_…`）和 token（`sk-ant-oat01-…`，只显示一次），写进 `.env`：
+      ```
+      ROUTINE_ID=trig_...
+      ROUTINE_TOKEN=sk-ant-oat01-...
+      ```
+      再运行一次 `bash scripts/setup-cloudflare.sh`。
+   5. App 里点「让 Claude 看一下」，几分钟后应该收到 Claude 的分析推送。
 
 ## 日常
 
-- 请假/放假：首页「这天请假 / 暂停检查」，当天 routine 会静默跳过，看门狗也不会报警。
-- 换路线：「路线」页重新选。
-- 推送级别：🟢 低优先级（不打扰），🟡 普通，🔴 最高（会响）。
+- **请假/放假**：首页「请假 / 暂停」，那天不检查也不推送。
+- **改时间、换路线**：「设置」页。每个时间会自动排好那天坐的班次；晚于「最晚到」会标出来。
+- **推送规则**：有问题、更严重了、已恢复、可能迟到 —— 一定推送。一切正常时，只有在「设置 → 正常时也通知」里勾选的检查才推。
+- **立即检查**：首页按钮，马上查一次 511（不等 10 分钟）。
+- 首页「最后检查 X 分钟前」超过 20 分钟会变红：说明系统可能出问题了，自己看一眼 511。
 
 ## 本地开发
 
 ```bash
-npm test                                   # 检查逻辑的测试（离线，用 checker/fixtures 的假数据）
+npm test                                    # 离线测试（checker/fixtures 的假数据 + Worker 巡查逻辑 + 推送加密）
 node checker/collect.mjs --mode enroute --fixtures checker/fixtures/muni-down --now 2026-10-14T13:57:00Z
 cp worker/.dev.vars.example worker/.dev.vars && npm run dev   # 本地 Worker：http://127.0.0.1:8787
+node scripts/mock-511.mjs                   # 假 511 + 假推送服务（.dev.vars 里 API_511_BASE=http://127.0.0.1:8788）
+curl "http://127.0.0.1:8787/__scheduled?cron=*/5+*+*+*+*"     # 手动触发一次 cron
 ```
 
-`checker/fixtures/` 里有这些场景：`normal`、`ferry-canceled`、`ferry-canceled-no-timetable`、`muni-down`、`enroute-normal`、`night-planned`、`paused`、`no-route`、`source-error`。
+`checker/fixtures/` 里的场景：`normal`、`ferry-canceled`、`ferry-canceled-no-timetable`、`muni-down`、`enroute-normal`、`night-planned`、`paused`、`no-route`、`source-error`、`evening-ferry-canceled`。
 
 ## 已知局限
 
-- 不是分钟级实时：4 个检查点之间新出的故障抓不到（routine 最短间隔 1 小时）。
-- 数据只和机构发布的一样快；Muni 突发故障时 alert 可能晚几分钟，所以同时看「站点实时预测是否消失」。
-- 睡前只能看到可预见的问题（计划停运、罢工、天气预警）。
-- 511 的部分接口格式没有官方 JSON 样例，解析写得比较宽松；第一次用真 key 跑时留意 `digest.errors`。
+- 最多晚约 10 分钟发现问题，再加上交通公司自己发公告的延迟。Claude 的详细分析还要几分钟（routine 启动时间官方没写）。
+- iPhone 网页 App 的通知不能穿透静音/专注模式（要在专注模式里允许通勤哨兵）；把主屏幕图标删掉，通知就没了。
+- 511 公告大多是英文：Worker 的即时提醒会带英文原文，Claude 的分析是中文。
+- Cloudflare 免费版每次运行只有约 10ms CPU，所以每次 cron 最多做一件重活（查 511 / 兜底 / 重新排班次），其余等 5 分钟后。上线后用 `wrangler tail` 看有没有超时。
+- 不支持跨午夜的通勤。
+- Claude routine 还是研究预览，API 触发接口以后可能变。
+- 511 每个 key 每小时 60 次：Worker 巡查每小时约 30 次，Claude 每次分析大多复用 Worker 刚拉的数据；突发分析每小时最多 3 次。

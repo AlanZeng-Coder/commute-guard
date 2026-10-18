@@ -1,10 +1,15 @@
-import { api, askPasscode, esc, registerSW, Unauthorized, WEEKDAY } from './api.js';
-import { DEFAULT_WORKDAYS } from './shared/schedule.mjs';
+import { Unauthorized, WEEKDAY, api, askPasscode, esc, registerSW } from './api.js';
+import { CHECKS, DEFAULT_NOTIFY, DEFAULT_SCHEDULE, HHMM, toMin } from './shared/schedule.mjs';
 import { addDays, pacificDate, weekdayOf } from './shared/time.mjs';
-import { geocode, nearbyFerryTerminals, planOptions } from './shared/transitous.mjs';
+import { geocode, nearbyFerryTerminals, patternOf, planDay, planOptions } from './shared/transitous.mjs';
 
 const app = document.getElementById('app');
 const ICON = { WALK: '🚶', FERRY: '⛴', TRAM: '🚋', SUBWAY: '🚇', BUS: '🚌', RAIL: '🚆', CABLE_CAR: '🚡' };
+const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
+const DIR = {
+  morning: { title: '去程：家 → 公司', field: 'leaveHome', verb: '出门', dest: '到公司' },
+  evening: { title: '回程：公司 → 家', field: 'leaveWork', verb: '下班', dest: '到家' },
+};
 
 // The browser sends a Referer, which Transitous accepts in place of a User-Agent.
 async function fetchJSON(url) {
@@ -13,71 +18,224 @@ async function fetchJSON(url) {
   return res.json();
 }
 
-const state = { home: null, work: null, options: [], picked: 0, current: null };
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const state = {
+  home: null,
+  work: null,
+  terminals: [],
+  schedule: clone(DEFAULT_SCHEDULE),
+  notify: { ...DEFAULT_NOTIFY },
+  morning: null,
+  evening: null,
+  choosing: { morning: null, evening: null }, // { time, date, options, picked }
+  saved: false,
+};
 
-function nextWeekday() {
-  let d = addDays(pacificDate(), 1);
-  while (!DEFAULT_WORKDAYS.includes(weekdayOf(d))) d = addDays(d, 1);
-  return d;
+// ---------- schedule helpers ----------
+
+const days = () => state.schedule.days;
+const timesFor = (dir) => [...new Set(DAY_ORDER.map((d) => days()[d]?.[DIR[dir].field]).filter((t) => HHMM.test(t ?? '')))];
+
+/** The next date (from tomorrow) whose weekday uses `time` for `dir` — Transitous plans real dates. */
+function dateFor(dir, time) {
+  for (let i = 1; i <= 7; i++) {
+    const date = addDays(pacificDate(), i);
+    if (days()[weekdayOf(date)]?.[DIR[dir].field] === time) return date;
+  }
+  return addDays(pacificDate(), 1);
 }
+
+/** Terminals near home: walked to in the morning, walked home from in the evening. */
+function endpoints(dir) {
+  if (dir === 'morning') return { from: state.home, to: state.work, terminals: state.terminals, terminalSide: 'from' };
+  return { from: state.work, to: state.home, terminals: state.terminals, terminalSide: 'to' };
+}
+
+// ---------- rendering ----------
 
 function legLine(l) {
   if (!l.transit) return `${ICON[l.mode] ?? '·'} ${l.depLocal} 步行 ${l.durationMin} 分钟 → ${esc(l.to.name || '目的地')}`;
   return `${ICON[l.mode] ?? '🚍'} ${l.depLocal} <b>${esc(l.routeShortName ?? '')}</b> ${esc(l.agencyName ?? '')}：${esc(l.from.name)} → ${esc(l.to.name)}（${l.arrLocal} 到）`;
 }
 
-function currentCard() {
-  const r = state.current;
-  if (!r?.primary) return '';
+const boardLine = (it) => {
+  const first = it.legs.find((l) => l.transit && l.mode === 'FERRY') ?? it.legs.find((l) => l.transit);
+  return first ? `${ICON[first.mode] ?? '🚍'} ${first.depLocal} ${esc(first.routeShortName ?? '')}` : '';
+};
+
+function addressCard() {
   return `
-    <section class="card">
-      <h2>当前路线</h2>
-      <div><b>${esc(r.primary.summary)}</b> <span class="muted small">${esc(r.primary.startLocal)} → ${esc(r.primary.endLocal)}</span></div>
-      <ol class="small muted" style="padding-left:20px;margin:8px 0 0">${r.primary.legs.map((l) => `<li>${legLine(l)}</li>`).join('')}</ol>
-      <p class="small muted">${esc(r.home?.label ?? '')} → ${esc(r.work?.label ?? '')} · 通勤日：${(r.workdays ?? []).map((d) => WEEKDAY[d]).join(' ')}</p>
+    <section class="card" id="addr">
+      <h2>1 · 家和公司</h2>
+      <label for="home-q">家地址</label>
+      <form class="row" data-target="home"><input id="home-q" placeholder="例如 1600 Webster St, Alameda" style="flex:1" value="${esc(state.home?.label ?? '')}" /><button>查找</button></form>
+      <ul class="suggestions hidden" id="home-list"></ul>
+      <div class="picked" id="home-picked">${state.home ? `✓ ${esc(state.home.label)}` : ''}</div>
+      <label for="work-q">公司地址</label>
+      <form class="row" data-target="work"><input id="work-q" placeholder="例如 1 Market St, San Francisco" style="flex:1" value="${esc(state.work?.label ?? '')}" /><button>查找</button></form>
+      <ul class="suggestions hidden" id="work-list"></ul>
+      <div class="picked" id="work-picked">${state.work ? `✓ ${esc(state.work.label)}` : ''}</div>
+    </section>`;
+}
+
+function timesCard() {
+  const rows = DAY_ORDER.map((d) => {
+    const t = days()[d];
+    const on = Boolean(t);
+    const input = (field, value) =>
+      `<input type="time" data-day="${d}" data-field="${field}" value="${esc(value ?? '')}" ${on ? '' : 'disabled'} />`;
+    return `<div class="sched-row ${on ? '' : 'off'}">
+      <label class="day"><input type="checkbox" data-day="${d}" data-field="on" ${on ? 'checked' : ''} />${WEEKDAY[d]}</label>
+      ${input('leaveHome', t?.leaveHome)}${input('arriveBy', t?.arriveBy)}${input('leaveWork', t?.leaveWork)}</div>`;
+  }).join('');
+  return `
+    <section class="card" id="times">
+      <h2>2 · 每天的时间</h2>
+      <p class="small muted">勾上要通勤的日子。「最晚到」用来提醒你会不会迟到；「下班」不填就不检查回程。</p>
+      <div class="sched-row head"><span></span><span>出门</span><span>最晚到</span><span>下班</span></div>
+      ${rows}
+      <div class="row" style="margin-top:10px">
+        <button id="copy-monday">把周一的时间复制到周二–周五</button>
+      </div>
+      <div class="grid2"><div><label for="night">睡前检查时间</label><input id="night" type="time" value="${esc(state.schedule.nightCheck ?? '21:30')}" /></div></div>
+    </section>`;
+}
+
+/** Per-day trips for a direction, as saved (or still to be planned). */
+function dayTable(dir) {
+  const set = state[dir];
+  const rows = DAY_ORDER.filter((d) => days()[d]).map((d) => {
+    const t = days()[d];
+    const time = t[DIR[dir].field];
+    if (!HHMM.test(time ?? '')) return `<li><b>${WEEKDAY[d]}</b> <span class="muted">没填${DIR[dir].verb}时间，不检查</span></li>`;
+    const plan = set?.byTime?.[time];
+    if (!plan) return `<li><b>${WEEKDAY[d]}</b> ${time} ${DIR[dir].verb} · <span class="muted">保存时自动排班次</span></li>`;
+    const it = plan.primary;
+    const warn = [];
+    if (patternOf(it) !== set.pattern) warn.push('⚠️ 这个时间没有同样的走法，换成了这条');
+    if (dir === 'morning' && t.arriveBy && toMin(it.endLocal) > toMin(t.arriveBy)) warn.push(`⚠️ ${it.endLocal} 才到，晚于 ${t.arriveBy}`);
+    return `<li><b>${WEEKDAY[d]}</b> ${time} ${DIR[dir].verb} → ${boardLine(it)} → ${it.endLocal} ${DIR[dir].dest}
+      ${warn.length ? `<div class="small warn">${warn.join('；')}</div>` : ''}</li>`;
+  });
+  return rows.length ? `<ul class="plain">${rows.join('')}</ul>` : '<p class="small muted">先在上面勾选通勤日。</p>';
+}
+
+function dirCard(dir, n) {
+  const set = state[dir];
+  const ch = state.choosing[dir];
+  const current = set ? Object.values(set.byTime)[0]?.primary : null;
+  const needs = dir === 'evening' && !timesFor('evening').length;
+  let body;
+  if (needs) body = '<p class="small muted">没有填「下班」时间，不检查回程。</p>';
+  else if (ch?.options) {
+    body = `
+      <p class="small muted">按 ${ch.date.slice(5)}（${WEEKDAY[weekdayOf(ch.date)]}）${ch.time} ${DIR[dir].verb}查到的方案。选你实际走的那条；其余存为 Plan B 备选。</p>
+      ${ch.options
+        .map(
+          (o, i) => `
+        <div class="option ${i === ch.picked ? 'sel' : ''}" data-dir="${dir}" data-i="${i}">
+          <div class="row"><span class="sum">${esc(o.summary)}</span>${o.hasFerry ? '<span class="chip green">渡轮</span>' : ''}<span class="spacer"></span>
+            <span class="small muted">${o.startLocal} → ${o.endLocal} · ${o.durationMin} 分钟</span></div>
+          <ol>${o.legs.map((l) => `<li>${legLine(l)}</li>`).join('')}</ol>
+        </div>`,
+        )
+        .join('')}
+      <div class="row"><button class="primary" data-use="${dir}">用这条路线</button><button data-cancel="${dir}">取消</button></div>`;
+  } else {
+    body = `
+      ${current ? `<div><b>${esc(current.summary)}</b> <span class="small muted">每天按你的时间自动排班次</span></div>${dayTable(dir)}` : '<p class="small muted">还没有选。</p>'}
+      <div class="row" style="margin-top:10px"><button class="${current ? '' : 'primary'}" data-choose="${dir}">${current ? '换一条路线' : '查找路线'}</button>
+        ${dir === 'evening' && current ? '<button data-clear="evening">不检查回程</button>' : ''}</div>`;
+  }
+  return `<section class="card" id="dir-${dir}"><h2>${n} · ${DIR[dir].title}</h2>${body}<p class="small muted" id="msg-${dir}"></p></section>`;
+}
+
+function notifyCard() {
+  const rows = CHECKS.map(
+    (c) => `<label class="check"><input type="checkbox" data-notify="${c.mode}" ${state.notify[c.mode] !== false ? 'checked' : ''} />
+      <span><b>${c.label}</b> <span class="muted small">${c.question}</span></span></label>`,
+  ).join('');
+  return `
+    <section class="card" id="notify">
+      <h2>5 · 正常时也通知</h2>
+      <p class="small muted">有问题、问题恢复、可能迟到，都会<b>马上</b>通知你，不能关。下面勾选的检查在一切正常时也发一条「🟢 正常」。</p>
+      ${rows}
     </section>`;
 }
 
 function render() {
-  const workdays = state.current?.workdays ?? DEFAULT_WORKDAYS;
   app.innerHTML = `
-    ${currentCard()}
-    <section class="card">
-      <h2>${state.current?.primary ? '重新选择路线' : '第一步：家和公司'}</h2>
-      <label for="home-q">家地址</label>
-      <form class="row" data-target="home"><input id="home-q" placeholder="例如 1600 Webster St, Alameda" style="flex:1" value="${esc(state.home?.label ?? '')}" /><button>查找</button></form>
-      <ul class="suggestions hidden" id="home-list"></ul>
-      <div class="picked" id="home-picked"></div>
-
-      <label for="work-q">公司地址</label>
-      <form class="row" data-target="work"><input id="work-q" placeholder="例如 1 Market St, San Francisco" style="flex:1" value="${esc(state.work?.label ?? '')}" /><button>查找</button></form>
-      <ul class="suggestions hidden" id="work-list"></ul>
-      <div class="picked" id="work-picked"></div>
-
-      <div class="grid2">
-        <div><label for="depart">出门时间</label><input id="depart" type="time" value="${esc(state.current?.departTime ?? '06:30')}" /></div>
-        <div><label for="date">按哪天的班表查</label><input id="date" type="date" value="${nextWeekday()}" /></div>
-      </div>
-      <label>通勤日</label>
-      <div class="days">${[1, 2, 3, 4, 5, 6, 0]
-        .map((d) => `<label><input type="checkbox" name="wd" value="${d}" ${workdays.includes(d) ? 'checked' : ''}/>${WEEKDAY[d]}</label>`)
-        .join('')}</div>
-      <div class="row" style="margin-top:14px"><button class="primary" id="plan" disabled>第二步：查找路线</button><span id="plan-msg" class="small muted"></span></div>
-    </section>
-    <section id="options"></section>`;
-
-  for (const form of app.querySelectorAll('form[data-target]')) form.addEventListener('submit', onSearch);
-  app.querySelector('#plan').addEventListener('click', onPlan);
-  updatePicked();
+    ${state.saved ? '<div class="banner info">✓ 已保存。之后每天按这些时间检查。</div>' : ''}
+    ${addressCard()}
+    ${timesCard()}
+    ${dirCard('morning', 3)}
+    ${dirCard('evening', 4)}
+    ${notifyCard()}
+    <div class="savebar"><button class="primary" id="save">保存</button><span id="save-msg" class="small muted"></span></div>`;
+  bind();
 }
 
-function updatePicked() {
-  for (const k of ['home', 'work']) {
-    const el = document.getElementById(`${k}-picked`);
-    if (el) el.textContent = state[k] ? `✓ ${state[k].label}` : '';
+function rerender(id, html) {
+  const el = document.getElementById(id);
+  if (el) el.outerHTML = html;
+  bind();
+}
+
+// ---------- events ----------
+
+function bind() {
+  for (const form of app.querySelectorAll('form[data-target]')) form.onsubmit = onSearch;
+  for (const el of app.querySelectorAll('#times input')) el.onchange = onTimeChange;
+  document.getElementById('copy-monday').onclick = () => {
+    const mon = days()[1];
+    if (!mon) return;
+    for (const d of [2, 3, 4, 5]) days()[d] = { ...mon };
+    rerender('times', timesCard());
+    refreshDirs();
+  };
+  document.getElementById('night').onchange = (e) => {
+    if (HHMM.test(e.target.value)) state.schedule.nightCheck = e.target.value;
+  };
+  for (const b of app.querySelectorAll('[data-choose]')) b.onclick = () => onChoose(b.dataset.choose);
+  for (const b of app.querySelectorAll('[data-use]')) b.onclick = () => onUse(b.dataset.use);
+  for (const b of app.querySelectorAll('[data-cancel]')) {
+    b.onclick = () => {
+      state.choosing[b.dataset.cancel] = null;
+      refreshDirs();
+    };
   }
-  const btn = document.getElementById('plan');
-  if (btn) btn.disabled = !(state.home && state.work);
+  for (const b of app.querySelectorAll('[data-clear]')) {
+    b.onclick = () => {
+      state.evening = null;
+      refreshDirs();
+    };
+  }
+  for (const el of app.querySelectorAll('.option[data-dir]')) {
+    el.onclick = () => {
+      state.choosing[el.dataset.dir].picked = Number(el.dataset.i);
+      refreshDirs();
+    };
+  }
+  for (const el of app.querySelectorAll('[data-notify]')) el.onchange = () => (state.notify[el.dataset.notify] = el.checked);
+  document.getElementById('save').onclick = onSave;
+}
+
+function refreshDirs() {
+  rerender('dir-morning', dirCard('morning', 3));
+  rerender('dir-evening', dirCard('evening', 4));
+}
+
+function onTimeChange(e) {
+  const d = Number(e.target.dataset.day);
+  const field = e.target.dataset.field;
+  if (field === 'on') {
+    if (e.target.checked) days()[d] = { ...(days()[1] ?? DEFAULT_SCHEDULE.days[1]) };
+    else delete days()[d];
+    rerender('times', timesCard());
+  } else {
+    days()[d][field] = e.target.value || null;
+  }
+  refreshDirs();
 }
 
 async function onSearch(e) {
@@ -98,12 +256,17 @@ async function onSearch(e) {
       .map((r, i) => `<li data-i="${i}">${esc(r.label)} <span class="chip">${r.type === 'STOP' ? '站点' : r.type === 'ADDRESS' ? '地址' : '地点'}</span></li>`)
       .join('');
     list.querySelectorAll('li[data-i]').forEach((li) =>
-      li.addEventListener('click', () => {
+      li.addEventListener('click', async () => {
         const r = results[Number(li.dataset.i)];
         state[target] = { label: r.label, lat: r.lat, lon: r.lon };
         list.classList.add('hidden');
         document.getElementById(`${target}-q`).value = r.label;
-        updatePicked();
+        document.getElementById(`${target}-picked`).textContent = `✓ ${r.label}`;
+        // A new address invalidates the trips planned from the old one.
+        state.morning = null;
+        state.evening = null;
+        if (target === 'home') state.terminals = await nearbyFerryTerminals(state.home, fetchJSON, { limit: 2 }).catch(() => []);
+        refreshDirs();
       }),
     );
   } catch (err) {
@@ -111,83 +274,103 @@ async function onSearch(e) {
   }
 }
 
-async function onPlan() {
-  const msg = document.getElementById('plan-msg');
-  const box = document.getElementById('options');
-  const departTime = document.getElementById('depart').value || '06:30';
-  const date = document.getElementById('date').value || nextWeekday();
-  msg.textContent = '找附近的渡轮码头…';
-  box.innerHTML = '';
+async function onChoose(dir) {
+  const msg = (t) => (document.getElementById(`msg-${dir}`).textContent = t);
+  if (!state.home || !state.work) return msg('先填好家和公司地址');
+  const time = timesFor(dir)[0];
+  if (!time) return msg(`先在「每天的时间」里填${DIR[dir].verb}时间`);
+  const date = dateFor(dir, time);
+  msg('规划中…（会查几次 Transitous，稍等）');
   try {
-    const terminals = await nearbyFerryTerminals(state.home, fetchJSON, { limit: 2 });
-    msg.textContent = `规划中（含 ${terminals.map((t) => t.name.replace(' Ferry Terminal', '')).join('、') || '无渡轮码头'}）…`;
-    state.options = await planOptions({ from: state.home, to: state.work, date, departTime, terminals, fetchJSON });
-    state.picked = 0;
-    msg.textContent = state.options.length ? '' : '没有找到方案，换个出门时间或日期试试';
-    renderOptions();
+    if (!state.terminals.length) state.terminals = await nearbyFerryTerminals(state.home, fetchJSON, { limit: 2 }).catch(() => []);
+    const options = await planOptions({ ...endpoints(dir), date, departTime: time, fetchJSON });
+    if (!options.length) return msg('没有找到方案，换个时间试试');
+    state.choosing[dir] = { time, date, options, picked: 0 };
+    refreshDirs();
   } catch (err) {
-    msg.textContent = `规划失败：${err.message}`;
+    msg(`规划失败：${err.message}`);
   }
 }
 
-function renderOptions() {
-  const box = document.getElementById('options');
-  if (!state.options.length) return;
-  box.innerHTML = `
-    <section class="card">
-      <h2>第三步：选你实际走的路线</h2>
-      <p class="small muted">选中的是<b>主路线</b>（每天检查它）；其余方案会存为<b>备选</b>，出问题时用来给 Plan B。</p>
-      ${state.options
-        .map(
-          (o, i) => `
-        <div class="option ${i === state.picked ? 'sel' : ''}" data-i="${i}">
-          <div class="row"><span class="sum">${esc(o.summary)}</span>${o.hasFerry ? '<span class="chip green">渡轮</span>' : ''}<span class="spacer"></span>
-            <span class="small muted">${o.startLocal} → ${o.endLocal} · ${o.durationMin} 分钟</span></div>
-          <ol>${o.legs.map((l) => `<li>${legLine(l)}</li>`).join('')}</ol>
-        </div>`,
-        )
-        .join('')}
-      <div class="row"><button class="primary" id="save">保存为我的路线</button><span id="save-msg" class="small muted"></span></div>
-    </section>`;
-  box.querySelectorAll('.option').forEach((el) =>
-    el.addEventListener('click', () => {
-      state.picked = Number(el.dataset.i);
-      renderOptions();
-    }),
-  );
-  box.querySelector('#save').addEventListener('click', onSave);
+/** Plan every departure time the schedule uses that has no trip yet, keeping the chosen lines. */
+async function planMissing(dir, report) {
+  const set = state[dir];
+  if (!set) return;
+  for (const time of timesFor(dir)) {
+    if (set.byTime[time]) continue;
+    report(`${DIR[dir].title.slice(0, 2)} ${time} 排班次…`);
+    const r = await planDay({ ...endpoints(dir), date: dateFor(dir, time), time, pattern: set.pattern, fetchJSON }).catch(() => null);
+    if (r?.primary) set.byTime[time] = { primary: r.primary, alternatives: r.alternatives };
+    else if (r?.options?.length) set.byTime[time] = { primary: r.options[0], alternatives: r.options.slice(1, 5) };
+  }
+  // Drop trips for times no longer used.
+  for (const time of Object.keys(set.byTime)) if (!timesFor(dir).includes(time)) delete set.byTime[time];
+}
+
+async function onUse(dir) {
+  const ch = state.choosing[dir];
+  const primary = ch.options[ch.picked];
+  state[dir] = {
+    pattern: patternOf(primary),
+    byTime: { [ch.time]: { primary, alternatives: ch.options.filter((_, i) => i !== ch.picked).slice(0, 4) } },
+  };
+  state.choosing[dir] = null;
+  refreshDirs();
+  const msg = document.getElementById(`msg-${dir}`);
+  await planMissing(dir, (t) => (msg.textContent = t));
+  msg.textContent = '';
+  refreshDirs();
 }
 
 async function onSave() {
   const msg = document.getElementById('save-msg');
-  const workdays = [...document.querySelectorAll('input[name=wd]:checked')].map((c) => Number(c.value));
-  const primary = state.options[state.picked];
-  const body = {
-    home: state.home,
-    work: state.work,
-    departTime: document.getElementById('depart').value || '06:30',
-    workdays: workdays.length ? workdays : DEFAULT_WORKDAYS,
-    primary,
-    alternatives: state.options.filter((_, i) => i !== state.picked).slice(0, 4),
-  };
-  msg.textContent = '保存中…';
+  const button = document.getElementById('save');
+  if (!state.home || !state.work) return (msg.textContent = '先填好家和公司地址');
+  if (!Object.keys(days()).length) return (msg.textContent = '至少勾选一个通勤日');
+  const noTime = DAY_ORDER.filter((d) => days()[d] && !HHMM.test(days()[d].leaveHome ?? ''));
+  if (noTime.length) return (msg.textContent = `${noTime.map((d) => WEEKDAY[d]).join('、')}没填出门时间`);
+  if (!state.morning) return (msg.textContent = '先选去程路线');
+  button.disabled = true;
   try {
-    await api('/api/route', { method: 'PUT', body });
-    state.current = await api('/api/route');
-    msg.textContent = '';
+    await planMissing('morning', (t) => (msg.textContent = t));
+    if (state.evening && timesFor('evening').length) await planMissing('evening', (t) => (msg.textContent = t));
+    else state.evening = null;
+    msg.textContent = '保存中…';
+    await api('/api/route', {
+      method: 'PUT',
+      body: {
+        home: state.home,
+        work: state.work,
+        terminals: state.terminals,
+        schedule: state.schedule,
+        notify: state.notify,
+        morning: state.morning,
+        evening: state.evening,
+      },
+    });
+    state.saved = true;
     render();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   } catch (err) {
     msg.textContent = `保存失败：${err.message}`;
+  } finally {
+    button.disabled = false;
   }
 }
 
 async function load() {
   try {
-    state.current = await api('/api/route');
-    if (state.current) {
-      state.home = state.current.home ?? null;
-      state.work = state.current.work ?? null;
+    const route = await api('/api/route');
+    if (route?.schedule) {
+      Object.assign(state, {
+        home: route.home,
+        work: route.work,
+        terminals: route.terminals ?? [],
+        schedule: route.schedule,
+        notify: { ...DEFAULT_NOTIFY, ...route.notify },
+        morning: route.morning,
+        evening: route.evening,
+      });
     }
     render();
   } catch (err) {

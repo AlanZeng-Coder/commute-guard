@@ -5,3 +5,4 @@ node_modules/
 checker/out/
 .DS_Store
 worker/public/shared/
+.claude/

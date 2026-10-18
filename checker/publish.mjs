@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Send Claude's verdict to the Worker, which stores it and pushes it to the phone (ntfy).
+// Send Claude's verdict to the Worker, which stores it and pushes it to the phone.
 //
 //   node checker/publish.mjs                      # reads checker/out/verdict.json + digest.json
 //   node checker/publish.mjs --skip               # record a skipped check (no push)
@@ -25,6 +25,7 @@ export function buildRecord(digest, verdict) {
   if (!headline) throw new Error('headline is required');
   return {
     mode: digest.mode,
+    dir: digest.dir,
     targetDate: digest.targetDate,
     level: verdict.level,
     headline: headline.slice(0, 120),
@@ -38,6 +39,7 @@ export function buildRecord(digest, verdict) {
     sources: (verdict.sources ?? []).slice(0, 6),
     suggestedLevel: digest.suggestedLevel,
     reasons: (digest.reasons ?? []).slice(0, 8),
+    timing: digest.timing ? { eta: digest.timing.eta, arriveBy: digest.timing.arriveBy, lateMin: digest.timing.lateMin } : null,
     errors: (digest.errors ?? []).map((e) => `${e.source}: ${e.message}`).slice(0, 6),
     checkedAt: new Date().toISOString(),
   };

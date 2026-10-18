@@ -7,7 +7,7 @@ import { collect } from '../collect.mjs';
 import { buildRecord } from '../publish.mjs';
 import { decodeFeed } from '../lib/gtfsrt.mjs';
 import { normalizeAlerts } from '../lib/normalize.mjs';
-import { createFixtureSource } from '../lib/source.mjs';
+import { createFixtureSource } from '../lib/fixtures.mjs';
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures');
 
@@ -140,4 +140,38 @@ test('publish record validates the verdict', async () => {
   assert.equal(rec.suggestedLevel, 'red');
   assert.throws(() => buildRecord(d, { level: 'purple', headline: 'x' }));
   assert.throws(() => buildRecord(d, { level: 'green', headline: ' ' }));
+});
+
+test('evening off-work check judges the trip home and estimates the arrival', async () => {
+  const d = await collect({
+    mode: 'offwork',
+    now: new Date('2026-10-14T17:05:00-07:00'),
+    source: createFixtureSource(join(fixtures, 'evening-ferry-canceled')),
+  });
+  assert.equal(d.dir, 'evening');
+  assert.equal(d.suggestedLevel, 'red');
+  assert.equal(d.route.leaveAt, '17:30');
+  assert.equal(muniLeg(d).realtime.status, 'running');
+  assert.equal(ferryLeg(d).realtime.status, 'canceled');
+  assert.equal(ferryLeg(d).realtime.nextDep, '18:45');
+  assert.equal(d.timing.eta, '19:15');
+  assert.deepEqual(d.timing.basis, ['N 预计 17:41 开', '改坐 18:45 的船']);
+});
+
+test('a delay that pushes the arrival past the must-arrive time is flagged', async () => {
+  const late = createFixtureSource(join(fixtures, 'ferry-canceled'));
+  const d = await collect({
+    mode: 'leave',
+    now: AT.leave,
+    source: { ...late, route: async () => ({ ...(await late.route()), schedule: { nightCheck: '21:30', days: { 3: { leaveHome: '06:30', arriveBy: '08:15' } } } }) },
+  });
+  assert.equal(d.timing.eta, '08:24');
+  assert.equal(d.timing.lateMin, 9);
+  assert.ok(d.reasons.some((r) => /预计 08:24 到，比要求的 08:15 晚 9 分钟/.test(r)), d.reasons.join('\n'));
+});
+
+test('no arrival estimate while a leg is suspended', async () => {
+  const d = await run('muni-down', 'enroute');
+  assert.equal(d.timing.eta, null);
+  assert.equal(d.timing.lateMin, null);
 });

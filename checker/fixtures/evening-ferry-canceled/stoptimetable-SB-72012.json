@@ -1,0 +1,55 @@
+{
+ "Siri": {
+  "ServiceDelivery": {
+   "ResponseTimestamp": "2026-10-14T17:00:00-07:00",
+   "StopTimetableDelivery": {
+    "version": "1.0",
+    "Status": true,
+    "TimetabledStopVisit": [
+     {
+      "MonitoringRef": "72012",
+      "TargetedVehicleJourney": {
+       "LineRef": "SEA",
+       "DirectionRef": "AL",
+       "DatedVehicleJourneyRef": "t_6144199_b_86948_tn_0",
+       "PublishedLineName": "SEA",
+       "OperatorRef": "SB",
+       "TargetedCall": {
+        "AimedArrivalTime": "2026-10-14T17:15:00-07:00",
+        "AimedDepartureTime": "2026-10-14T17:15:00-07:00"
+       }
+      }
+     },
+     {
+      "MonitoringRef": "72012",
+      "TargetedVehicleJourney": {
+       "LineRef": "SEA",
+       "DirectionRef": "AL",
+       "DatedVehicleJourneyRef": "t_6144201_b_86948_tn_0",
+       "PublishedLineName": "SEA",
+       "OperatorRef": "SB",
+       "TargetedCall": {
+        "AimedArrivalTime": "2026-10-14T18:15:00-07:00",
+        "AimedDepartureTime": "2026-10-14T18:15:00-07:00"
+       }
+      }
+     },
+     {
+      "MonitoringRef": "72012",
+      "TargetedVehicleJourney": {
+       "LineRef": "SEA",
+       "DirectionRef": "AL",
+       "DatedVehicleJourneyRef": "t_6144203_b_86948_tn_0",
+       "PublishedLineName": "SEA",
+       "OperatorRef": "SB",
+       "TargetedCall": {
+        "AimedArrivalTime": "2026-10-14T18:45:00-07:00",
+        "AimedDepartureTime": "2026-10-14T18:45:00-07:00"
+       }
+      }
+     }
+    ]
+   }
+  }
+ }
+}

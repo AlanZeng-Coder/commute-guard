@@ -1,29 +1,41 @@
 #!/usr/bin/env node
 // Gather everything one check needs and write checker/out/digest.json.
 //
-//   node checker/collect.mjs --mode leave
+//   node checker/collect.mjs --remote --mode leave --date 2026-10-20 --dir morning   # the routine
+//   node checker/collect.mjs --mode leave                                            # laptop, live 511
 //   node checker/collect.mjs --mode enroute --fixtures checker/fixtures/muni-down --now 2026-10-14T13:57:00Z
 //
-// Env: API_511_KEY, CG_BASE_URL, CG_WRITE_TOKEN (optional in the cloud; the agent proxy adds it).
+// --remote asks our Worker to build the digest (it already has fresh 511 data from its watch),
+// so the routine needs no 511 key and no npm packages. --date defaults to the commute day the
+// mode is about (night → tomorrow), --dir to the mode's direction.
+//
+// Env: CG_BASE_URL, CG_WRITE_TOKEN (optional in the cloud; the agent proxy adds it), API_511_KEY (local live runs).
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MODES } from '../shared/schedule.mjs';
-import { analyze, skipReason } from './lib/analyze.mjs';
-import { loadDotEnv, parseArgs } from './lib/env.mjs';
-import { gather } from './lib/gather.mjs';
-import { createFixtureSource, createLiveSource } from './lib/source.mjs';
+import { MODES, checkByMode, dirAt } from '../shared/schedule.mjs';
+import { pacificHHMM } from '../shared/time.mjs';
+import { targetDateFor } from './lib/analyze.mjs';
+import { buildDigest } from './lib/digest.mjs';
+import { loadDotEnv, parseArgs, workerBase, workerHeaders } from './lib/env.mjs';
+import { getJSON } from './lib/http.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-export async function collect({ mode, now = new Date(), source, routeOverride }) {
-  const route = routeOverride ?? (await source.route());
-  const pause = await source.pause().catch(() => ({ dates: [] }));
-  const empty = { data: { alerts: {}, tripUpdates: {}, stopVisits: {}, timetable: {}, weather: {} }, errors: [] };
-  const needData = route?.primary && !skipReason({ mode, now, route, pause });
-  const gathered = needData ? await gather(source, route, mode) : empty;
-  return analyze({ mode, now, route, pause, gathered });
+export function resolveCheck({ mode, now = new Date(), date, dir }) {
+  return {
+    mode,
+    date: date ?? targetDateFor(mode, now),
+    dir: dir ?? checkByMode(mode)?.dir ?? dirAt(pacificHHMM(now)),
+  };
+}
+
+export async function collect({ mode, now = new Date(), source, date, dir, routeOverride }) {
+  const check = resolveCheck({ mode, now, date, dir });
+  const src = routeOverride ? { ...source, route: async () => routeOverride } : source;
+  return (await buildDigest({ ...check, now, source: src })).digest;
 }
 
 async function main() {
@@ -34,18 +46,41 @@ async function main() {
     console.error(`--mode must be one of: ${MODES.join(', ')}`);
     process.exit(2);
   }
-  const source = args.fixtures ? createFixtureSource(resolve(args.fixtures)) : createLiveSource();
-  const routeOverride = args.route ? JSON.parse(readFileSync(resolve(args.route), 'utf8')) : undefined;
+  if (args.date && !DATE_RE.test(args.date)) {
+    console.error('--date must be YYYY-MM-DD');
+    process.exit(2);
+  }
+  if (args.dir && !['morning', 'evening'].includes(args.dir)) {
+    console.error('--dir must be morning or evening');
+    process.exit(2);
+  }
   const now = args.now ? new Date(args.now) : new Date();
+  const check = resolveCheck({ mode, now, date: args.date, dir: args.dir });
 
-  const digest = await collect({ mode, now, source, routeOverride });
+  let digest;
+  if (args.remote) {
+    const q = new URLSearchParams(check);
+    digest = await getJSON(`${workerBase()}/api/digest?${q}`, { headers: workerHeaders(), timeoutMs: 60000 });
+  } else {
+    // Imported lazily so --remote runs without the protobuf package installed.
+    const source = args.fixtures
+      ? (await import('./lib/fixtures.mjs')).createFixtureSource(resolve(args.fixtures))
+      : (await import('./lib/source.mjs')).createLiveSource({
+          key511: process.env.API_511_KEY,
+          workerBase: args.route ? undefined : workerBase(),
+          workerHeaders: workerHeaders(),
+        });
+    const routeOverride = args.route ? JSON.parse(readFileSync(resolve(args.route), 'utf8')) : undefined;
+    digest = await collect({ ...check, now, source, routeOverride });
+  }
 
   const out = resolve(args.out ?? resolve(here, 'out', 'digest.json'));
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, JSON.stringify(digest, null, 2));
 
-  console.log(`${digest.modeLabel} → ${digest.targetDate}  建议：${digest.suggestedLevel}`);
+  console.log(`${digest.modeLabel}（${digest.dirLabel ?? ''}）→ ${digest.targetDate}  建议：${digest.suggestedLevel}`);
   for (const r of digest.reasons) console.log(`  ${r}`);
+  if (digest.timing?.eta) console.log(`  预计到达 ${digest.timing.eta}${digest.timing.arriveBy ? `（要求 ${digest.timing.arriveBy} 前）` : ''}`);
   for (const e of digest.errors ?? []) console.log(`  ⚠ ${e.source}: ${e.message}`);
   console.log(`digest: ${out}`);
 }

@@ -90,18 +90,33 @@ function shiftWalkAccess(accessLegs, boardLocal) {
   return accessLegs.map((l) => ({ ...l, depLocal: fromMin(toMin(l.depLocal) + shift), arrLocal: fromMin(toMin(l.arrLocal) + shift) }));
 }
 
+const withDuration = (out) => ({ ...out, durationMin: minutes(`1970-01-01T${out.startLocal}:00Z`, `1970-01-01T${out.endLocal}:00Z`) });
+
 function compose(access, main) {
   const board = main.legs.find((l) => l.transit)?.depLocal;
-  const out = finish([...shiftWalkAccess(access.legs, board), ...main.legs]);
-  return { ...out, durationMin: minutes(`1970-01-01T${out.startLocal}:00Z`, `1970-01-01T${out.endLocal}:00Z`) };
+  return withDuration(finish([...shiftWalkAccess(access.legs, board), ...main.legs]));
 }
 
-// Same start time + same sequence of lines = the same commute for our purposes.
-const signature = (it) =>
-  `${it.startLocal}|${it.legs
+/** `main` ends at a terminal; walk on from there (`egress` is a walking plan, re-timed to follow). */
+function composeEgress(main, egress) {
+  let t = toMin(main.endLocal);
+  const legs = egress.legs.map((l) => {
+    const out = { ...l, depLocal: fromMin(t), arrLocal: fromMin(t + l.durationMin) };
+    t += l.durationMin;
+    return out;
+  });
+  return withDuration(finish([...main.legs, ...legs]));
+}
+
+/** The lines a commute uses, in order ("SB:SEA>N") — what the user picks once per direction. */
+export const patternOf = (it) =>
+  it.legs
     .filter((l) => l.transit)
     .map((l) => l.routeId)
-    .join('>')}`;
+    .join('>');
+
+// Same start time + same sequence of lines = the same commute for our purposes.
+const signature = (it) => `${it.startLocal}|${patternOf(it)}`;
 
 
 function haversineKm(a, b) {
@@ -173,11 +188,14 @@ async function plan(fetchJSON, params) {
 const place = (p) => (p.id && !p.lat ? p.id : `${p.lat},${p.lon}`);
 
 /**
- * Candidate commutes for a weekday: the planner's own best options, plus for each nearby
- * ferry terminal "get to the terminal" + "ferry onward" stitched together. (Transitous'
- * `via` parameter lets a trip stay aboard through the via stop, which gives odd results.)
+ * Candidate commutes for a weekday: the planner's own best options, plus options stitched
+ * through each nearby ferry terminal. The planner rarely offers the boat on its own when the
+ * terminal is just a walk from either end, so:
+ *   terminalSide 'from' (to work):  walk to the terminal + "terminal → destination"
+ *   terminalSide 'to' (home):       "origin → terminal" + walk home
+ * (Transitous' `via` parameter lets a trip stay aboard through the via stop, which gives odd results.)
  */
-export async function planOptions({ from, to, date, departTime, terminals = [], fetchJSON, slackMin = 45 }) {
+export async function planOptions({ from, to, date, departTime, terminals = [], terminalSide = 'from', fetchJSON, slackMin = 45 }) {
   const time = pacificToDate(date, departTime).toISOString();
   const results = [];
 
@@ -185,7 +203,7 @@ export async function planOptions({ from, to, date, departTime, terminals = [], 
     (r.itineraries ?? []).map(normalizeItinerary),
   );
 
-  const viaTerminals = terminals.map(async (t) => {
+  const viaFrom = async (t) => {
     const access = await plan(fetchJSON, { fromPlace: place(from), toPlace: t.id, time, numItineraries: '2' });
     const accessOptions = [...(access.direct ?? []), ...(access.itineraries ?? [])]
       .map(normalizeItinerary)
@@ -202,8 +220,22 @@ export async function planOptions({ from, to, date, departTime, terminals = [], 
       maxPreTransitTime: '60',
     });
     return (main.itineraries ?? []).map((it) => compose(reach, normalizeItinerary(it)));
-  });
+  };
 
+  const viaTo = async (t) => {
+    const [main, egress] = await Promise.all([
+      plan(fetchJSON, { fromPlace: place(from), toPlace: t.id, time, numItineraries: '3' }),
+      plan(fetchJSON, { fromPlace: t.id, toPlace: place(to), time, numItineraries: '1' }),
+    ]);
+    const walk = (egress.direct ?? []).map(normalizeItinerary).find((it) => it.legs.length && !it.legs.some((l) => l.transit));
+    if (!walk) return [];
+    return (main.itineraries ?? [])
+      .map(normalizeItinerary)
+      .filter((it) => it.hasFerry)
+      .map((it) => composeEgress(it, walk));
+  };
+
+  const viaTerminals = terminals.map(terminalSide === 'to' ? viaTo : viaFrom);
   for (const r of await Promise.allSettled([direct, ...viaTerminals])) {
     if (r.status === 'fulfilled') results.push(...r.value);
   }
@@ -212,6 +244,8 @@ export async function planOptions({ from, to, date, departTime, terminals = [], 
   // the best one of the same kind (ferry vs. not), so the list stays short and sensible.
   const seen = new Set();
   const unique = results
+    // Overnight or absurdly long results (the planner's fallback when nothing runs) are not commutes.
+    .filter((it) => it.durationMin > 0 && it.durationMin <= 240 && it.endLocal > it.startLocal)
     .sort((a, b) => a.endLocal.localeCompare(b.endLocal))
     .filter((it) => {
       const sig = signature(it);
@@ -225,4 +259,15 @@ export async function planOptions({ from, to, date, departTime, terminals = [], 
     .filter((it) => toMin(it.endLocal) <= best[it.hasFerry] + slackMin)
     .sort((a, b) => Number(b.hasFerry) - Number(a.hasFerry) || a.endLocal.localeCompare(b.endLocal))
     .slice(0, 8);
+}
+
+/**
+ * Plan one departure time and pick the option that uses the same lines the user chose.
+ * Returns { primary: null, options } when that combination isn't offered at this time.
+ */
+export async function planDay({ from, to, date, time, terminals, terminalSide, pattern, fetchJSON }) {
+  const options = await planOptions({ from, to, date, departTime: time, terminals, terminalSide, fetchJSON });
+  const i = options.findIndex((o) => patternOf(o) === pattern);
+  if (i < 0) return { primary: null, alternatives: [], options };
+  return { primary: options[i], alternatives: options.filter((_, j) => j !== i).slice(0, 4), options };
 }

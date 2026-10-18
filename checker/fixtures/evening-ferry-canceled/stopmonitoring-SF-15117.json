@@ -1,0 +1,76 @@
+{
+ "ServiceDelivery": {
+  "ResponseTimestamp": "2026-10-14T17:00:00-07:00",
+  "ProducerRef": "SF",
+  "Status": true,
+  "StopMonitoringDelivery": {
+   "version": "1.4",
+   "Status": true,
+   "MonitoredStopVisit": [
+    {
+     "RecordedAtTime": "2026-10-14T17:00:00-07:00",
+     "MonitoringRef": "15117",
+     "MonitoredVehicleJourney": {
+      "LineRef": "N",
+      "DirectionRef": "IB",
+      "FramedVehicleJourneyRef": {
+       "DataFrameRef": "2026-10-14",
+       "DatedVehicleJourneyRef": "x"
+      },
+      "PublishedLineName": "N",
+      "OperatorRef": "SF",
+      "DestinationName": "Caltrain/Ballpark",
+      "Monitored": true,
+      "MonitoredCall": {
+       "StopPointRef": "15117",
+       "AimedDepartureTime": "2026-10-14T17:31:00-07:00",
+       "ExpectedDepartureTime": "2026-10-14T17:31:00-07:00"
+      }
+     }
+    },
+    {
+     "RecordedAtTime": "2026-10-14T17:00:00-07:00",
+     "MonitoringRef": "15117",
+     "MonitoredVehicleJourney": {
+      "LineRef": "N",
+      "DirectionRef": "IB",
+      "FramedVehicleJourneyRef": {
+       "DataFrameRef": "2026-10-14",
+       "DatedVehicleJourneyRef": "x"
+      },
+      "PublishedLineName": "N",
+      "OperatorRef": "SF",
+      "DestinationName": "Caltrain/Ballpark",
+      "Monitored": true,
+      "MonitoredCall": {
+       "StopPointRef": "15117",
+       "AimedDepartureTime": "2026-10-14T17:41:00-07:00",
+       "ExpectedDepartureTime": "2026-10-14T17:41:00-07:00"
+      }
+     }
+    },
+    {
+     "RecordedAtTime": "2026-10-14T17:00:00-07:00",
+     "MonitoringRef": "15117",
+     "MonitoredVehicleJourney": {
+      "LineRef": "N",
+      "DirectionRef": "IB",
+      "FramedVehicleJourneyRef": {
+       "DataFrameRef": "2026-10-14",
+       "DatedVehicleJourneyRef": "x"
+      },
+      "PublishedLineName": "N",
+      "OperatorRef": "SF",
+      "DestinationName": "Caltrain/Ballpark",
+      "Monitored": true,
+      "MonitoredCall": {
+       "StopPointRef": "15117",
+       "AimedDepartureTime": "2026-10-14T17:52:00-07:00",
+       "ExpectedDepartureTime": "2026-10-14T17:52:00-07:00"
+      }
+     }
+    }
+   ]
+  }
+ }
+}

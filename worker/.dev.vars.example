@@ -1,4 +1,12 @@
 APP_PASSCODE=dev-pass
 WRITE_TOKEN=dev-write
-# Leave empty locally so testing doesn't push to your phone
+# Fill with `node scripts/vapid-keys.mjs` to try notifications locally
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_JWK=
+# Real 511 data locally (or API_511_BASE=http://127.0.0.1:8788 with a mock server)
+API_511_KEY=
+API_511_BASE=
+# Leave empty so local testing doesn't wake the real routine or push to ntfy
+ROUTINE_ID=
+ROUTINE_TOKEN=
 NTFY_TOPIC=

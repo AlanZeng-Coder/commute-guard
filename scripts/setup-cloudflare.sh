@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# One-time Cloudflare setup: KV namespace, secrets, deploy. Safe to re-run (keeps existing values
-# from .env). Prerequisite: `wrangler login`.
-#
-# Writes the generated values to ../.env (gitignored):
-#   CG_BASE_URL, CG_WRITE_TOKEN, APP_PASSCODE, NTFY_TOPIC
+# Cloudflare setup: KV namespace, secrets, deploy. Safe to re-run — generated values are kept in
+# ../.env (gitignored), and values you add there later (API_511_KEY, ROUTINE_ID, ROUTINE_TOKEN,
+# optional NTFY_TOPIC) are uploaded on the next run. Prerequisite: `wrangler login`.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,29 +26,44 @@ if grep -q REPLACE_WITH_KV_NAMESPACE_ID wrangler.toml; then
   sed -i.bak "s/REPLACE_WITH_KV_NAMESPACE_ID/$id/" wrangler.toml && rm -f wrangler.toml.bak
 fi
 
-# 2. Secrets (generated once, then reused)
-APP_PASSCODE="$(get APP_PASSCODE)"; [ -n "$APP_PASSCODE" ] || APP_PASSCODE="$(gen 6)"
-CG_WRITE_TOKEN="$(get CG_WRITE_TOKEN)"; [ -n "$CG_WRITE_TOKEN" ] || CG_WRITE_TOKEN="$(gen 24)"
-NTFY_TOPIC="$(get NTFY_TOPIC)"; [ -n "$NTFY_TOPIC" ] || NTFY_TOPIC="commute-guard-$(gen 8)"
-put APP_PASSCODE "$APP_PASSCODE"
-put CG_WRITE_TOKEN "$CG_WRITE_TOKEN"
-put NTFY_TOPIC "$NTFY_TOPIC"
+# 2. Generated once, then reused
+[ -n "$(get APP_PASSCODE)" ] || put APP_PASSCODE "$(gen 6)"
+[ -n "$(get CG_WRITE_TOKEN)" ] || put CG_WRITE_TOKEN "$(gen 24)"
+[ -n "$(get VAPID_PUBLIC_KEY)" ] || node "$ROOT/scripts/vapid-keys.mjs" >> "$ENV_FILE"
 
-# 3. Deploy, then attach secrets in one batch
+# 3. Deploy, then upload every secret that has a value
 echo "→ 部署 Worker…"
 out="$(wrangler deploy 2>&1)"; echo "$out" | tail -5
 url="$(echo "$out" | grep -oE 'https://[a-z0-9.-]+\.workers\.dev' | head -1)"
 [ -n "$url" ] && put CG_BASE_URL "$url"
 
 secrets="$(mktemp)"; trap 'rm -f "$secrets"' EXIT
-printf '{"APP_PASSCODE":"%s","WRITE_TOKEN":"%s","NTFY_TOPIC":"%s"}' "$APP_PASSCODE" "$CG_WRITE_TOKEN" "$NTFY_TOPIC" > "$secrets"
+node --input-type=module -e '
+  import { readFileSync } from "node:fs";
+  const env = Object.fromEntries(
+    readFileSync(process.argv[1], "utf8").split("\n").map((l) => l.match(/^([A-Z0-9_]+)=(.*)$/)).filter(Boolean).map((m) => [m[1], m[2]]),
+  );
+  // Worker secret name → .env name
+  const names = { APP_PASSCODE: "APP_PASSCODE", WRITE_TOKEN: "CG_WRITE_TOKEN", VAPID_PUBLIC_KEY: "VAPID_PUBLIC_KEY",
+    VAPID_PRIVATE_JWK: "VAPID_PRIVATE_JWK", API_511_KEY: "API_511_KEY", ROUTINE_ID: "ROUTINE_ID",
+    ROUTINE_TOKEN: "ROUTINE_TOKEN", NTFY_TOPIC: "NTFY_TOPIC" };
+  const out = Object.fromEntries(Object.entries(names).filter(([, k]) => env[k]).map(([s, k]) => [s, env[k]]));
+  process.stdout.write(JSON.stringify(out));
+' "$ENV_FILE" > "$secrets"
 wrangler secret bulk "$secrets"
 
-cat <<EOF
+missing=()
+[ -n "$(get API_511_KEY)" ] || missing+=("API_511_KEY（511 token，没有它查不了实时数据）")
+[ -n "$(get ROUTINE_TOKEN)" ] || missing+=("ROUTINE_ID / ROUTINE_TOKEN（Claude routine 的 API 触发器；没有的话只推送自动检查结果）")
+
+cat <<MSG
 
 ✅ 部署完成
-  网站：        ${url:-（见上面 wrangler 输出）}
-  访问密码：    $APP_PASSCODE
-  ntfy topic：  $NTFY_TOPIC   ← 在手机 ntfy App 里订阅这个 topic
+  网站：      ${url:-（见上面 wrangler 输出）}
+  访问密码：  $(get APP_PASSCODE)
   这些值都存在 $ENV_FILE（不会进 git）
-EOF
+MSG
+if [ ${#missing[@]} -gt 0 ]; then
+  echo "  还没填（写进 .env 后再运行一次本脚本）："
+  for m in "${missing[@]}"; do echo "    - $m"; done
+fi

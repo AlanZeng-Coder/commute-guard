@@ -2,8 +2,8 @@
 // Claude reads the digest and makes the final call; this layer only does what rules can do
 // reliably (id matching, time windows, cancellations, missing predictions).
 
-import { checkByMode } from '../../shared/schedule.mjs';
-import { addDays, pacificDate, pacificHHMM, pacificToDate, weekdayOf } from '../../shared/time.mjs';
+import { DIR_LABEL, checkByMode, commutesOn, dayTimes, fromMin, toMin } from '../../shared/schedule.mjs';
+import { addDays, pacificDate, pacificHHMM, pacificToDate } from '../../shared/time.mjs';
 import { idKey } from './normalize.mjs';
 import { realtimeKinds } from './gather.mjs';
 
@@ -179,32 +179,53 @@ function ferryRealtime(leg, planned, data) {
     }
   }
 
+  // The next boat on this line after yours that isn't cancelled — what the user would take instead.
+  if (Array.isArray(tt)) {
+    const canceled = new Set((out.canceledOnRoute ?? []).map((t) => idKey(t.tripId)));
+    const next = tt
+      .filter((v) => v.aimed > planned + 60 && lineOk(v.line) && !canceled.has(idKey(v.journeyRef)))
+      .sort((a, b) => a.aimed - b.aimed)[0];
+    out.nextDep = fmt(next?.aimed) ?? null;
+  }
+
+  // `key` identifies the condition across polls (the Worker's watch diffs them); text may change.
   const flags = [];
   const label = `${out.plannedDep} 那班 ${leg.routeShortName ?? ''} 船`;
-  if (out.status === 'canceled') flags.push({ level: 'red', text: `${label}已取消` });
-  else if (out.status === 'skips-your-stop') flags.push({ level: 'red', text: `${label}不停 ${leg.from.name}` });
-  if (out.delayMin !== null && out.delayMin >= 30) flags.push({ level: 'red', text: `${label}预计晚 ${out.delayMin} 分钟` });
+  const instead = out.nextDep ? `，下一班 ${out.nextDep}` : '';
+  if (out.status === 'canceled') flags.push({ level: 'red', key: 'ferry:canceled', text: `${label}已取消${instead}` });
+  else if (out.status === 'skips-your-stop')
+    flags.push({ level: 'red', key: 'ferry:skips', text: `${label}不停 ${leg.from.name}${instead}` });
+  if (out.delayMin !== null && out.delayMin >= 30)
+    flags.push({ level: 'red', key: 'ferry:delay', text: `${label}预计晚 ${out.delayMin} 分钟` });
   else if (out.delayMin !== null && out.delayMin >= 10)
-    flags.push({ level: 'yellow', text: `${label}预计晚 ${out.delayMin} 分钟` });
+    flags.push({ level: 'yellow', key: 'ferry:delay', text: `${label}预计晚 ${out.delayMin} 分钟` });
   const others = (out.canceledOnRoute ?? []).filter((t) => idKey(t.tripId) !== idKey(out.tripRef));
   if (others.length && out.status !== 'canceled') {
     flags.push({
       level: out.status === 'unknown' ? 'yellow' : 'info',
+      key: 'ferry:others-canceled',
       text: `该航线今天有 ${others.length} 班被取消${out.status === 'unknown' ? '（无法确认是否包括你那班）' : ''}`,
     });
   }
   return { ...out, flags };
 }
 
-function lineRealtime(leg, planned, nowSec, data) {
+/** How far ahead line predictions are judged; the Worker's watch starts early, so it waits longer. */
+const LINE_LOOKAHEAD_MIN = { monitor: 75 };
+
+function lineRealtime(leg, planned, nowSec, data, mode) {
   const key = `${leg.agencyId}:${leg.from.stopCode || leg.from.stopId}`;
   const out = { kind: 'line', plannedDep: fmt(planned), status: 'unknown', upcoming: [] };
   const flags = [];
-  if (planned - nowSec > 120 * 60) return { ...out, status: 'too-early', flags };
+  if (planned - nowSec > (LINE_LOOKAHEAD_MIN[mode] ?? 120) * 60) return { ...out, status: 'too-early', flags };
   const sv = data.stopVisits[key];
   if (!Array.isArray(sv)) return { ...out, status: 'error', flags };
   if (!sv.length) {
-    flags.push({ level: 'yellow', text: `${leg.from.name} 站实时数据为空，无法确认 ${leg.routeShortName} 是否在跑` });
+    flags.push({
+      level: 'yellow',
+      key: 'line:no-data',
+      text: `${leg.from.name} 站实时数据为空，无法确认 ${leg.routeShortName} 是否在跑`,
+    });
     return { ...out, status: 'no-data', flags };
   }
   const rk = routeKeys(leg);
@@ -224,11 +245,16 @@ function lineRealtime(leg, planned, nowSec, data) {
   else if (nearNow.length) out.status = 'running-now';
   else if (mine.length) {
     out.status = 'sparse';
-    flags.push({ level: 'info', text: `${leg.routeShortName} 在 ${leg.from.name} 的下一班预测要到 ${fmt(t(mine[0]))}` });
+    flags.push({
+      level: 'info',
+      key: 'line:sparse',
+      text: `${leg.routeShortName} 在 ${leg.from.name} 的下一班预测要到 ${fmt(t(mine[0]))}`,
+    });
   } else {
     out.status = 'no-predictions';
     flags.push({
       level: 'yellow',
+      key: 'line:no-predictions',
       text: `${leg.from.name} 站有其他线路的实时预测，但 ${leg.routeShortName} 没有任何班次（可能停运或大间隔）`,
     });
   }
@@ -252,7 +278,11 @@ function analyzeWeather(weather, window) {
   );
   for (const a of alerts) {
     const when = `${fmtDay(toSec(a.onset)) ?? '?'} – ${fmtDay(toSec(a.ends)) ?? '?'}`;
-    flags.push({ level: SEVERE_WEATHER.test(a.event) ? 'yellow' : 'info', text: `NWS ${a.event}（${when}）` });
+    flags.push({
+      level: SEVERE_WEATHER.test(a.event) ? 'yellow' : 'info',
+      key: `weather:${a.event}`,
+      text: `NWS ${a.event}（${when}）`,
+    });
   }
   const hourly = (weather.hourly ?? [])
     .filter((p) => {
@@ -261,12 +291,83 @@ function analyzeWeather(weather, window) {
     })
     .map((p) => ({ time: fmt(toSec(p.start)), temp: p.temperature, wind: `${p.windDirection} ${p.windSpeed}`, sky: p.short }));
   const windMph = Math.max(0, ...hourly.map((h) => maxNumber(h.wind, 'mph') ?? 0));
-  if (windMph >= 30) flags.push({ level: 'yellow', text: `通勤时段风速可达 ${windMph} mph` });
-  if (hourly.some((h) => /fog/i.test(h.sky))) flags.push({ level: 'info', text: '通勤时段有雾' });
+  if (windMph >= 30) flags.push({ level: 'yellow', key: 'weather:wind', text: `通勤时段风速可达 ${windMph} mph` });
+  if (hourly.some((h) => /fog/i.test(h.sky))) flags.push({ level: 'info', key: 'weather:fog', text: '通勤时段有雾' });
   const marine = (weather.marine ?? []).slice(0, 3).map((p) => ({ name: p.name, forecast: p.detailed }));
   const kt = marine.length ? maxNumber(marine[0].forecast + ' ' + (marine[1]?.forecast ?? ''), 'kt') : null;
-  if (kt !== null && kt >= 30) flags.push({ level: 'yellow', text: `海湾风力预报最高 ${kt} kt，渡轮可能受影响` });
+  if (kt !== null && kt >= 30)
+    flags.push({ level: 'yellow', key: 'weather:marine', text: `海湾风力预报最高 ${kt} kt，渡轮可能受影响` });
   return { alerts, hourly, marine, flags };
+}
+
+// ---------- arrival estimate ----------
+
+/**
+ * Move the planned arrival by what realtime says: a late boat, or a cancelled one (take the
+ * next), then the first predicted Muni/bus after the user can reach that stop.
+ */
+function estimateArrival(trip, legsOut) {
+  const p = trip.primary;
+  const basis = [];
+  let shift = 0;
+  let known = true;
+  let ti = 0;
+  p.legs.forEach((leg, i) => {
+    if (!leg.transit) return;
+    const out = legsOut[ti++];
+    const rt = out?.realtime;
+    if (!known) return;
+    const dep = toMin(leg.depLocal);
+    // A leg that is down (suspended, no service) has no arrival time to estimate —
+    // except a cancelled boat, where the next boat gives one.
+    const boatHandled = rt?.kind === 'ferry' && (rt.status === 'canceled' || rt.status === 'skips-your-stop');
+    if (out?.level === 'red' && !boatHandled) {
+      known = false;
+      return;
+    }
+    if (!rt) return;
+    if (rt.kind === 'ferry') {
+      if (rt.status === 'canceled' || rt.status === 'skips-your-stop') {
+        if (!rt.nextDep) {
+          known = false;
+          return;
+        }
+        shift = Math.max(shift, toMin(rt.nextDep) - dep);
+        basis.push(`改坐 ${rt.nextDep} 的船`);
+      } else if (rt.delayMin > 0) {
+        shift = Math.max(shift, rt.delayMin);
+        basis.push(`船晚 ${rt.delayMin} 分钟`);
+      }
+      return;
+    }
+    if (rt.status !== 'running' && rt.status !== 'running-now') return;
+    const ready = toMin(p.legs[i - 1]?.arrLocal ?? leg.depLocal) + shift;
+    const next = rt.upcoming
+      .map((u) => toMin(u.expected))
+      .filter((m) => m >= ready)
+      .sort((a, b) => a - b)[0];
+    if (next === undefined) return;
+    shift = next - dep;
+    basis.push(`${leg.routeShortName ?? ''} 预计 ${fromMin(next)} 开`);
+  });
+
+  const eta = known ? fromMin(toMin(p.endLocal) + shift) : null;
+  const lateMin = eta && trip.arriveBy ? toMin(eta) - toMin(trip.arriveBy) : null;
+  const flags = [];
+  if (lateMin > 0 && shift > 0)
+    flags.push({ level: 'yellow', key: 'late', text: `预计 ${eta} 到，比要求的 ${trip.arriveBy} 晚 ${lateMin} 分钟` });
+  else if (lateMin > 0)
+    flags.push({ level: 'info', key: 'plan-late', text: `按计划 ${eta} 到，晚于你要求的 ${trip.arriveBy}` });
+  return {
+    plannedStart: p.startLocal,
+    plannedArrival: p.endLocal,
+    arriveBy: trip.arriveBy ?? null,
+    eta,
+    shiftMin: known ? shift : null,
+    lateMin,
+    basis,
+    flags,
+  };
 }
 
 // ---------- digest ----------
@@ -294,59 +395,57 @@ export function targetDateFor(mode, now) {
   return mode === 'night' ? addDays(today, 1) : today;
 }
 
-export function skipReason({ mode, now, route, pause }) {
-  const targetDate = targetDateFor(mode, now);
-  if (!route?.primary) return null; // handled as an error, not a skip
-  const workdays = route.workdays ?? [1, 2, 3, 4, 5];
-  if (!workdays.includes(weekdayOf(targetDate))) return { reason: 'not-workday', message: `${targetDate} 不是通勤日` };
-  if ((pause?.dates ?? []).includes(targetDate)) return { reason: 'paused', message: `${targetDate} 已设为暂停/请假` };
+export function skipReason({ date, dir, route, pause }) {
+  if (!route) return null; // handled as an error, not a skip
+  if (!dayTimes(route, date)) return { reason: 'not-workday', message: `${date} 不是通勤日` };
+  if (!commutesOn(route, date, dir)) return { reason: 'no-trip', message: `${date} 没有设置${DIR_LABEL[dir]}的路线或时间` };
+  if ((pause?.dates ?? []).includes(date)) return { reason: 'paused', message: `${date} 已设为暂停/请假` };
   return null;
 }
 
-export function analyze({ mode, now = new Date(), route, pause, gathered }) {
+/**
+ * route: the saved route (schedule, home/work); trip: tripFor(route, date, dir) — the one
+ * itinerary (plus alternatives) to judge; gathered: output of gather().
+ */
+export function analyze({ mode, now = new Date(), date, dir, route, trip, pause, gathered }) {
   const check = checkByMode(mode);
-  const targetDate = targetDateFor(mode, now);
   const nowSec = now.getTime() / 1000;
   const base = {
-    version: 1,
+    version: 2,
     mode,
     modeLabel: check?.label ?? mode,
     question: check?.question ?? '',
+    dir,
+    dirLabel: DIR_LABEL[dir],
     generatedAt: now.toISOString(),
     nowLocal: pacificHHMM(now),
-    targetDate,
+    targetDate: date,
   };
+  const problem = (reason) => ({ ...base, skip: null, suggestedLevel: 'yellow', reasons: [reason], legs: [], errors: [] });
 
-  if (!route?.primary) {
-    return {
-      ...base,
-      skip: null,
-      suggestedLevel: 'yellow',
-      reasons: ['还没有设置通勤路线：打开网站的「设置路线」页面选一条路线'],
-      errors: [],
-    };
-  }
-  const skip = skipReason({ mode, now, route, pause });
-  if (skip) return { ...base, skip, suggestedLevel: 'skip', reasons: [skip.message], errors: [] };
+  if (!route) return problem('还没有设置通勤路线：打开 App 的「设置」页面选一条路线');
+  const skip = skipReason({ date, dir, route, pause });
+  if (skip) return { ...base, skip, suggestedLevel: 'skip', reasons: [skip.message], legs: [], errors: [] };
+  if (!trip) return problem(`还没有选${DIR_LABEL[dir]}的路线：打开 App 的「设置」页面选一条`);
 
   const { data, errors } = gathered;
   const rt = realtimeKinds(mode);
-  const p = route.primary;
-  const commuteWindow = [epoch(targetDate, p.startLocal) - 30 * 60, epoch(targetDate, p.endLocal) + 30 * 60];
-  const isToday = targetDate === pacificDate(now);
+  const p = trip.primary;
+  const commuteWindow = [epoch(date, p.startLocal) - 30 * 60, epoch(date, p.endLocal) + 30 * 60];
+  const isToday = date === pacificDate(now);
 
   const legs = p.legs
     .filter((l) => l.transit)
     .map((leg) => {
-      const dep = epoch(targetDate, leg.depLocal);
-      const arr = epoch(targetDate, leg.arrLocal);
+      const dep = epoch(date, leg.depLocal);
+      const arr = epoch(date, leg.arrLocal);
       const alerts = matchAlerts(data.alerts[leg.agencyId], leg, [dep - 30 * 60, arr + 30 * 60]);
       const flags = alerts
         .filter((a) => a.severity !== 'info')
-        .map((a) => ({ level: a.severity, text: `${a.header || a.effect}` }));
+        .map((a) => ({ level: a.severity, key: `alert:${a.id}`, text: `${a.header || a.effect}`, url: a.url }));
       let realtime = null;
       if (isToday && leg.mode === 'FERRY' && rt.ferry) realtime = ferryRealtime(leg, dep, data);
-      else if (isToday && leg.mode !== 'FERRY' && rt.line) realtime = lineRealtime(leg, dep, nowSec, data);
+      else if (isToday && leg.mode !== 'FERRY' && rt.line) realtime = lineRealtime(leg, dep, nowSec, data, mode);
       if (realtime) flags.push(...realtime.flags);
       const stopKey = `${leg.agencyId}:${leg.from.stopCode || leg.from.stopId}`;
       const errs = errors.filter(
@@ -357,16 +456,16 @@ export function analyze({ mode, now = new Date(), route, pause, gathered }) {
       );
       if (errs.length) {
         const sources = errs.map((e) => e.source.replace(/^511 /, '')).join('、');
-        flags.push({ level: 'yellow', text: `数据源出错（${sources}），这一段无法完全确认` });
+        flags.push({ level: 'yellow', key: 'source', text: `数据源出错（${sources}），这一段无法完全确认` });
       }
       return { ...legSummary(leg), level: levelOf(flags), flags, alerts, realtime };
     });
 
-  const alternatives = (route.alternatives ?? []).map((it) => {
+  const alternatives = (trip.alternatives ?? []).map((it) => {
     const flags = [];
     for (const leg of it.legs.filter((l) => l.transit)) {
-      const dep = epoch(targetDate, leg.depLocal);
-      const arr = epoch(targetDate, leg.arrLocal);
+      const dep = epoch(date, leg.depLocal);
+      const arr = epoch(date, leg.arrLocal);
       for (const a of matchAlerts(data.alerts[leg.agencyId], leg, [dep - 30 * 60, arr + 30 * 60])) {
         if (a.severity !== 'info') flags.push({ level: a.severity, text: `${legLabel(leg)}：${a.header || a.effect}` });
       }
@@ -384,6 +483,7 @@ export function analyze({ mode, now = new Date(), route, pause, gathered }) {
 
   const weather = analyzeWeather(data.weather, commuteWindow);
   const weatherErrors = errors.filter((e) => e.source.startsWith('NWS'));
+  const timing = estimateArrival(trip, legs);
 
   const otherAlerts = {};
   for (const [ag, list] of Object.entries(data.alerts)) {
@@ -393,6 +493,7 @@ export function analyze({ mode, now = new Date(), route, pause, gathered }) {
   const ranked = [
     ...legs.flatMap((l) => l.flags.map((f) => ({ ...f, text: `${l.label}：${f.text}` }))),
     ...weather.flags.map((f) => ({ ...f, text: `天气：${f.text}` })),
+    ...timing.flags,
   ].filter((f) => f.level !== 'info');
   const top = levelOf(ranked);
   const suggestedLevel = top === 'info' ? 'green' : top;
@@ -407,13 +508,16 @@ export function analyze({ mode, now = new Date(), route, pause, gathered }) {
       summary: p.summary,
       home: route.home?.label,
       work: route.work?.label,
-      departTime: route.departTime,
+      leaveAt: trip.time,
+      arriveBy: trip.arriveBy,
       startLocal: p.startLocal,
       endLocal: p.endLocal,
+      planSource: trip.source,
     },
     suggestedLevel,
     reasons,
     legs,
+    timing,
     alternatives,
     weather: { ...weather, errors: weatherErrors },
     alertCountsByAgency: otherAlerts,

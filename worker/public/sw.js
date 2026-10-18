@@ -1,8 +1,9 @@
-// Offline support: the app shell is served network-first (so updates show up right away)
-// with the cache as fallback; the last /api/status response is kept so the app still
-// shows the most recent verdict when the phone is offline (e.g. on the ferry).
+// Service worker: shows the Worker's push messages as 通勤哨兵 notifications (with the open
+// problem count on the home-screen icon), and keeps the app usable offline — the app shell is
+// served network-first with the cache as fallback, and the last /api/status response is kept
+// so the most recent verdict still shows on the ferry without signal.
 
-const CACHE = 'cg-v3';
+const CACHE = 'cg-v4';
 const SHELL = [
   '/',
   '/setup',
@@ -48,5 +49,49 @@ self.addEventListener('fetch', (e) => {
         return res;
       })
       .catch(() => caches.match(e.request, { ignoreSearch: true })),
+  );
+});
+
+// Payload from worker/src/notify.js: { title, body, tag, badge, url }.
+self.addEventListener('push', (e) => {
+  let d = {};
+  try {
+    d = e.data?.json() ?? {};
+  } catch {
+    d = { body: e.data?.text() ?? '' };
+  }
+  const jobs = [
+    // A tag makes "已恢复" replace the alert it resolves instead of piling up.
+    self.registration.showNotification(d.title || '通勤哨兵', {
+      body: d.body || '',
+      tag: d.tag || undefined,
+      renotify: Boolean(d.tag),
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      data: { url: d.url || '/' },
+    }),
+  ];
+  if (typeof d.badge === 'number' && self.navigator.setAppBadge) {
+    jobs.push(d.badge > 0 ? self.navigator.setAppBadge(d.badge) : self.navigator.clearAppBadge());
+  }
+  e.waitUntil(
+    Promise.all(jobs).then(async () => {
+      for (const c of await self.clients.matchAll({ type: 'window' })) c.postMessage('refresh');
+    }),
+  );
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = e.notification.data?.url || '/';
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      const open = list.find((c) => 'focus' in c);
+      if (open) {
+        open.postMessage('refresh');
+        return open.focus();
+      }
+      return self.clients.openWindow(url);
+    }),
   );
 });

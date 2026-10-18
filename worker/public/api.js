@@ -1,4 +1,5 @@
-// Tiny API client shared by both pages. The passcode lives in localStorage on this device only.
+// Tiny API client shared by both pages, plus the notification setup. The passcode lives in
+// localStorage on this device only.
 
 const KEY = 'cg-passcode';
 
@@ -66,4 +67,62 @@ export const WEEKDAY = ['周日', '周一', '周二', '周三', '周四', '周�
 
 export function registerSW() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+// ---------- notifications (Web Push) ----------
+
+export const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+/**
+ * 'needs-install' — iPhone Safari only allows push for apps opened from the home screen;
+ * 'unsupported' | 'default' | 'granted' | 'denied' otherwise.
+ */
+export function pushSupport() {
+  if (!('serviceWorker' in navigator)) return 'unsupported';
+  if (isIOS() && !isStandalone()) return 'needs-install';
+  if (!('PushManager' in window) || !('Notification' in window)) return 'unsupported';
+  return Notification.permission;
+}
+
+function keyBytes(b64url) {
+  const s = atob(b64url.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((b64url.length + 3) % 4));
+  return Uint8Array.from(s, (c) => c.charCodeAt(0));
+}
+
+export async function currentSubscription() {
+  if (!('serviceWorker' in navigator)) return null;
+  const reg = await navigator.serviceWorker.ready;
+  return reg.pushManager?.getSubscription() ?? null;
+}
+
+/** Must run from a tap (iOS only shows the permission prompt for a user gesture). */
+export async function enablePush(publicKey) {
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') {
+    throw new Error(perm === 'denied' ? '通知被关掉了：到 iPhone「设置 → 通知 → 通勤哨兵」打开允许通知' : '没有允许通知');
+  }
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  const key = keyBytes(publicKey);
+  const sameKey = sub?.options?.applicationServerKey
+    ? new Uint8Array(sub.options.applicationServerKey).every((b, i) => b === key[i])
+    : Boolean(sub);
+  if (sub && !sameKey) {
+    await sub.unsubscribe();
+    sub = null;
+  }
+  sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+  await api('/api/push/subscribe', { method: 'POST', body: sub.toJSON() });
+  return sub;
+}
+
+/** Show the number of open problems on the home-screen icon. */
+export function setBadge(n) {
+  try {
+    if (n > 0) navigator.setAppBadge?.(n);
+    else navigator.clearAppBadge?.();
+  } catch {
+    /* not supported */
+  }
 }
