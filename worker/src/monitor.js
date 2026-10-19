@@ -20,14 +20,16 @@ import {
   checkpointsFor,
   commutesOn,
   dayTimes,
+  departureFor,
   fromMin,
+  planInputs,
   toMin,
   tripFor,
   watchWindow,
 } from '../../shared/schedule.mjs';
 import { addDays, pacificDate, pacificHHMM } from '../../shared/time.mjs';
 import { openCount } from './notify.js';
-import { LEVEL_EMOJI, autoRecord, recordMessage, saveRecord, shouldPush } from './records.js';
+import { LEVEL_EMOJI, autoRecord, recordMessage, saveRecord, shouldPush, supersededBy } from './records.js';
 
 const MIN = 60000;
 const FIRE_EARLY_MIN = 3; // cron runs every 5 min: fire up to 3 min before the checkpoint
@@ -85,17 +87,28 @@ export async function tick(ctx) {
       }
     }
     if (changed) await store.putFires(date, fires);
-    // A result whose push didn't get through is sent again (up to 3 tries, 5 minutes apart).
-    const unsent = checks.filter(
-      (r) => r.push && !r.push.delivered && r.push.deliverable && r.push.attempts < 3 && now - new Date(r.push.at) >= 5 * MIN,
-    );
-    if (unsent.length) {
-      const results = await ctx.notify(unsent.map(recordMessage));
-      unsent.forEach((r, i) => {
-        r.push = { ...r.push, delivered: Boolean(results[i]?.delivered), attempts: r.push.attempts + 1, at: now.toISOString() };
+    // A result whose push didn't get through is sent again, backing off (5, 10, 20, 40, 60 minutes),
+    // unless something newer has gone out since or the watch has pushed a worse problem.
+    const states = await store.pushStates(date);
+    const due = checks.filter((r) => {
+      const st = states[r.mode];
+      if (!st || st.delivered || !st.deliverable || st.stopped || st.checkedAt !== r.checkedAt || st.attempts >= 6) return false;
+      return now - new Date(st.at) >= Math.min(5 * 2 ** (st.attempts - 1), 60) * MIN;
+    });
+    if (due.length) {
+      const send = [];
+      for (const r of due) {
+        const newer = await supersededBy(store, r, states[r.mode].at);
+        if (newer) states[r.mode] = { ...states[r.mode], stopped: newer };
+        else send.push(r);
+      }
+      const results = send.length ? await ctx.notify(send.map(recordMessage)) : [];
+      send.forEach((r, i) => {
+        const st = states[r.mode];
+        states[r.mode] = { ...st, delivered: Boolean(results[i]?.delivered), attempts: st.attempts + 1, at: now.toISOString() };
+        did.push(`resend:${date}:${r.mode}:${states[r.mode].delivered ? 'ok' : 'failed'}`);
       });
-      await store.putChecks(date, checks);
-      did.push(...unsent.map((r) => `resend:${date}:${r.mode}:${r.push.delivered ? 'ok' : 'failed'}`));
+      await store.putPushStates(date, states);
     }
   }
 
@@ -126,11 +139,13 @@ export async function tick(ctx) {
     const tomorrow = addDays(today, 1);
     for (const dir of DIRS) {
       if (!commutesOn(route, tomorrow, dir) || pause.dates.includes(tomorrow)) continue;
-      const stored = await store.plan(tomorrow, dir);
+      const inputs = planInputs(route, dir, departureFor(route, tomorrow, dir));
+      // A plan made from different inputs (the user changed the trip since) counts as none.
+      const stored = (await store.plan(tomorrow, dir))?.inputs === inputs ? await store.plan(tomorrow, dir) : null;
       if (stored?.primary || stored?.notOffered) continue;
       if ((stored?.attempts ?? 0) >= 3 || (stored && now - new Date(stored.at) < 30 * MIN)) continue;
       // Record the attempt first: if the run is cut off mid-plan, the next run won't loop on it.
-      await store.putPlan(tomorrow, dir, { primary: null, attempts: (stored?.attempts ?? 0) + 1, at: now.toISOString() });
+      await store.putPlan(tomorrow, dir, { primary: null, attempts: (stored?.attempts ?? 0) + 1, at: now.toISOString(), inputs });
       const plan = await ctx.replan(route, tomorrow, dir).catch(() => null);
       if (plan) await store.putPlan(tomorrow, dir, plan);
       did.push(`replan:${tomorrow}:${dir}:${plan?.primary ? 'ok' : plan?.notOffered ? 'not-offered' : 'failed'}`);
@@ -164,9 +179,11 @@ export async function poll(ctx, route, date, dir, prev, win = null, extra = {}) 
   if (events.length) {
     extra = { ...extra, lastEventAt: at };
     // Ask Claude first, so a push only promises a Plan B when an analysis is actually coming.
-    // A data-source failure alone is not worth a run (it would read the same failing source).
-    const fresh = events.filter((e) => e.type !== 'resolved' && e.issue.flag !== 'source');
+    // Not for a data-source failure alone (it would read the same failing source), nor again for
+    // a problem already handed to Claude (a push being retried after a failed delivery).
+    const fresh = events.filter((e) => e.type !== 'resolved' && e.issue.flag !== 'source' && !e.issue.alertedAt);
     const analyzing = fresh.length > 0 && (await maybeFireAlert(ctx, date, dir, fresh));
+    if (analyzing) for (const e of fresh) e.issue.alertedAt = at;
     const badge = await openCount(store, now, { [dir]: issues });
     const results = await ctx.notify(
       events.map((ev) => ({ ...issueMessage(ev, digest, date, dir, analyzing), badge })),
@@ -225,6 +242,11 @@ export function issueMessage({ type, issue, remaining }, digest, date, dir, anal
         title: `${LEVEL_EMOJI[remaining.level]} 好转了：${where}`,
         body: `已解除：${issue.text}\n还有：${remaining.text}`,
       };
+    }
+    const t = digest.timing;
+    // The delay is gone but the plan itself arrives after the must-arrive time (accepted in setup).
+    if (issue.flag === 'late' && t?.lateMin > 0) {
+      return { ...base, kind: 'resolved', level: 'yellow', title: '🟡 好转了：可能迟到', body: `延误没了：按计划 ${t.eta} 到（仍晚于 ${t.arriveBy}）` };
     }
     const title = { late: '✅ 现在来得及了', source: `✅ 数据恢复了：${where}` }[issue.flag] ?? `✅ 已恢复：${where}`;
     return { ...base, kind: 'resolved', level: 'green', title, body: `之前：${issue.text}（${hhmm(issue.firstSeen)} 发现）` };
@@ -291,7 +313,15 @@ async function sendFallback(ctx, cp, fire) {
     await markDone();
     return 'answered';
   }
-  if (shouldPush(record, route)) await ctx.notify(recordMessage(record));
+  let outcome = 'saved';
+  if (shouldPush(record, route)) {
+    const pushed = await ctx.notify(recordMessage(record));
+    // Retried by the cron like Claude's results when it didn't get through.
+    const states = await store.pushStates(cp.date);
+    states[record.mode] = { delivered: Boolean(pushed?.delivered), deliverable: Boolean(pushed?.deliverable), attempts: 1, at: now.toISOString(), checkedAt: record.checkedAt };
+    await store.putPushStates(cp.date, states);
+    outcome = pushed?.delivered ? 'sent' : 'failed';
+  }
   await markDone();
-  return 'sent';
+  return outcome;
 }

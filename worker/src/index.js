@@ -20,6 +20,7 @@ import {
   departureFor,
   dirAt,
   linesOf,
+  planInputs,
   preferredBoarding,
   tripFor,
   watchWindow,
@@ -28,7 +29,7 @@ import { addDays, pacificDate, pacificHHMM } from '../../shared/time.mjs';
 import { planDay } from '../../shared/transitous.mjs';
 import { poll, tick } from './monitor.js';
 import { notify } from './notify.js';
-import { recordMessage, saveRecord, shouldPush, validRecord } from './records.js';
+import { recordMessage, saveRecord, shouldPush, supersededBy, validRecord } from './records.js';
 import { fireRoutine, routineConfigured } from './routine.js';
 import { statusPayload } from './status.js';
 import { createStore } from './store.js';
@@ -161,9 +162,11 @@ async function replan(route, date, dir, now) {
     board: preferredBoarding(set, time),
     fetchJSON: (u) => getJSON(u),
   });
-  const base = { time, pattern: set.pattern, plannedAt: now.toISOString() };
+  const base = { time, pattern: set.pattern, inputs: planInputs(route, dir, time), plannedAt: now.toISOString() };
   if (!r.primary) return { ...base, primary: null, notOffered: true, offered: r.options.slice(0, 3).map((o) => `${o.startLocal}-${o.endLocal} ${o.summary}`) };
-  return { ...base, primary: r.primary, alternatives: r.alternatives };
+  // A partial planner answer can find the boat but miss the other options: keep the saved Plan B then.
+  const alternatives = r.alternatives.length ? r.alternatives : (set.byTime?.[time]?.alternatives ?? []);
+  return { ...base, primary: r.primary, alternatives };
 }
 
 function makeCtx(env, now) {
@@ -275,7 +278,11 @@ async function handleApi(request, env, url) {
   if (path === '/api/pause' && method === 'PUT') {
     if (role !== 'app') return fail(403, 'forbidden');
     const today = pacificDate(now);
-    const dates = [...new Set((body?.dates ?? []).filter((d) => DATE_RE.test(d) && d >= today))].sort().slice(0, 60);
+    // {add} / {remove} change one date against the stored list, so two quick taps can't undo each other.
+    let dates = body?.dates ?? (await store.pause()).dates;
+    if (body?.add) dates = [...dates, body.add];
+    if (body?.remove) dates = dates.filter((d) => d !== body.remove);
+    dates = [...new Set(dates.filter((d) => DATE_RE.test(d) && d >= today))].sort().slice(0, 60);
     await store.put('pause', { dates });
     return json({ dates });
   }
@@ -289,20 +296,17 @@ async function handleApi(request, env, url) {
     record.dir ??= checkByMode(record.mode)?.dir ?? dirAt(pacificHHMM(now));
     // A verdict built from data older than a problem the watch has since pushed (new, worse or
     // changed), and milder than that problem, must not be the last word on the phone.
-    const RANK = { green: 0, yellow: 1, red: 2 };
-    const watch = await store.watch(record.targetDate, record.dir);
-    const newer = record.digestAt
-      ? openIssues(watch?.issues).filter((i) => (i.notifiedAt ?? i.firstSeen) > record.digestAt && RANK[i.notified] > RANK[record.level])
-      : [];
-    if (newer.length) record.superseded = `分析之后又发现：${newer.map((i) => i.text).join('；')}`;
-    if (newer.length || !shouldPush(record, await store.route())) {
-      await saveRecord(store, record);
-      return json({ ok: true, pushed: 'skipped', delivered: null, reason: newer.length ? 'superseded' : 'policy' });
+    const newer = await supersededBy(store, record);
+    if (newer) record.superseded = newer;
+    await saveRecord(store, record);
+    if (newer || !shouldPush(record, await store.route())) {
+      return json({ ok: true, pushed: 'skipped', delivered: null, reason: newer ? 'superseded' : 'policy' });
     }
     const pushed = await notify(env, store, now, recordMessage(record));
     // The cron re-sends a result whose push didn't get through (see monitor.js).
-    record.push = { delivered: pushed.delivered, deliverable: pushed.deliverable, attempts: 1, at: now.toISOString() };
-    await saveRecord(store, record);
+    const states = await store.pushStates(record.targetDate);
+    states[record.mode] = { delivered: pushed.delivered, deliverable: pushed.deliverable, attempts: 1, at: now.toISOString(), checkedAt: record.checkedAt };
+    await store.putPushStates(record.targetDate, states);
     return json({ ok: true, pushed, delivered: pushed.delivered });
   }
 
@@ -314,6 +318,11 @@ async function handleApi(request, env, url) {
     if (!DATE_RE.test(date)) return fail(400, 'date must be YYYY-MM-DD');
     const dir = url.searchParams.get('dir') || checkByMode(mode)?.dir || dirAt(pacificHHMM(now));
     if (!DIRS.includes(dir)) return fail(400, 'dir must be morning or evening');
+    // Recorded before the watch is read: a poll finishing meanwhile then knows this run may not
+    // have seen its problem, and wakes Claude again (see maybeFireAlert in monitor.js).
+    const fires = await store.fires(date);
+    fires.lastDigestAt = now.toISOString();
+    await store.putFires(date, fires);
     const { source, tight, watch, snapshotAt } = await checkSource(env, store, now, date, dir);
     // Today's watch knows what the feeds have forgotten (a boat that left, a cancelled trip gone from the feed).
     const prev = date === pacificDate(now) ? (watch?.timing?.legs ?? null) : null;
@@ -330,10 +339,6 @@ async function handleApi(request, env, url) {
           openIssues: openIssues(watch.issues).map((i) => ({ level: i.level, leg: i.legLabel, text: i.text, since: i.firstSeen })),
         }
       : null;
-    // The watch uses this to tell whether a run it just woke has already read its data.
-    const fires = await store.fires(date);
-    fires.lastDigestAt = now.toISOString();
-    await store.putFires(date, fires);
     return json(digest);
   }
 
@@ -343,8 +348,11 @@ async function handleApi(request, env, url) {
     // http://127.0.0.1 is allowed for the local end-to-end test's mock push service.
     const endpointOk = /^(https:\/\/|http:\/\/(127\.0\.0\.1|localhost)[:/])/.test(sub?.endpoint ?? '');
     if (!endpointOk || !sub.keys?.p256dh || !sub.keys?.auth) return fail(400, 'not a push subscription');
-    const subs = (await store.subs()).filter((s) => s.endpoint !== sub.endpoint);
-    subs.push({ endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth }, addedAt: now.toISOString() });
+    const all = await store.subs();
+    const same = all.find((s) => s.endpoint === sub.endpoint && s.keys.p256dh === sub.keys.p256dh && s.keys.auth === sub.keys.auth);
+    const subs = all.filter((s) => s.endpoint !== sub.endpoint);
+    // Re-posting the same subscription doesn't fix failing pushes: keep its failure record.
+    subs.push(same ?? { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth }, addedAt: now.toISOString() });
     await store.putSubs(subs.slice(-5));
     await env.CG.put('meta:origin', url.origin);
     return json({ ok: true, subscriptions: Math.min(subs.length, 5) });
@@ -383,10 +391,12 @@ async function handleApi(request, env, url) {
     const throttled = (message) => json({ ok: true, throttled: true, message });
     if (sinceMin < 5) return throttled(`${Math.max(1, Math.round(sinceMin))} 分钟前刚查过，结果就是最新的`);
     if (manual.length >= 3) return throttled('一小时内已经手动查了 3 次（511 每小时有调用上限），等自动巡查');
-    // Leave room for this poll and the scheduled polls still due this hour.
+    // Leave room for this poll and the scheduled polls that can still run this hour (the next one
+    // is at least 9 minutes after this poll).
     const cost = prev?.calls ?? 6;
-    const scheduled = Math.ceil((60 - now.getUTCMinutes()) / 10);
-    if ((await store.used511(now)) + cost * (scheduled + 1) > BUDGET_PER_HOUR - 5) {
+    const minutesLeft = Math.min(60 - now.getUTCMinutes(), (watchWindow(route, trip.date, trip.dir, trip).end - now) / MIN);
+    const scheduled = Math.max(0, Math.floor((minutesLeft - 9) / 10) + 1);
+    if ((await store.used511(now)) + cost * (1 + scheduled) > BUDGET_PER_HOUR - 5) {
       return throttled('这一小时的 511 调用快用完了，等自动巡查');
     }
     const win = watchWindow(route, trip.date, trip.dir, trip);

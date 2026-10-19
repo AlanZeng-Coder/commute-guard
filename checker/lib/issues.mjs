@@ -40,8 +40,7 @@ export function issuesFromDigest(digest) {
  *    a cancelled 07:00 boat drops out of the feed after 07:00, and that is not a recovery.
  *  - unknown: legs whose data failed this poll. Their problems can't be judged cleared, but new
  *    ones (including the "can't confirm" warning itself) still count.
- *  - timingUnknown / stillLate: "late" can't be judged cleared without an estimate, and isn't
- *    cleared while the estimate still says late.
+ *  - timingUnknown: "late" can't be judged cleared without an estimate.
  */
 export function pollContext(digest, now) {
   const departed = new Set();
@@ -55,13 +54,7 @@ export function pollContext(digest, now) {
     if (Math.min(board, planned) + 10 < nowMin) passed.add(i);
     if (leg.flags?.some((f) => f.key === 'source')) unknown.add(i);
   });
-  return {
-    departed,
-    passed,
-    unknown,
-    timingUnknown: !digest.timing?.eta || unknown.size > 0,
-    stillLate: (digest.timing?.lateMin ?? 0) > 0,
-  };
+  return { departed, passed, unknown, timingUnknown: !digest.timing?.eta || unknown.size > 0 };
 }
 
 /** Numeric signatures (10-minute buckets) re-notify only when they grow; others on any change. */
@@ -76,9 +69,8 @@ function sigMoved(sig, before) {
  * { type: 'new' | 'worse' | 'update' | 'resolved', issue, before?, remaining? }.
  */
 export function diffIssues(prev = {}, current = [], at = new Date().toISOString(), ctx = {}) {
-  const { departed = new Set(), passed = new Set(), unknown = new Set(), timingUnknown = false, stillLate = false } = ctx;
-  const held = (p) =>
-    p.leg === null ? timingUnknown || (p.flag === 'late' && stillLate) : departed.has(p.leg) || passed.has(p.leg) || unknown.has(p.leg);
+  const { departed = new Set(), passed = new Set(), unknown = new Set(), timingUnknown = false } = ctx;
+  const held = (p) => (p.leg === null ? timingUnknown : departed.has(p.leg) || passed.has(p.leg) || unknown.has(p.leg));
   const next = {};
   const events = [];
 
@@ -94,12 +86,14 @@ export function diffIssues(prev = {}, current = [], at = new Date().toISOString(
       notified: p?.notified ?? null,
       notifiedSig: p?.notifiedSig ?? null,
       notifiedAt: p?.notifiedAt ?? null,
+      alertedAt: p?.alertedAt ?? null, // when Claude was asked about it (the watch asks once)
     };
     if (issue.seen >= (CONFIRM_POLLS[c.flag] ?? 1)) {
       const before = { notified: issue.notified, notifiedSig: issue.notifiedSig, notifiedAt: issue.notifiedAt };
       if (!issue.notified) events.push({ type: 'new', issue, before });
       else if (RANK[c.level] > RANK[issue.notified]) events.push({ type: 'worse', issue, before });
-      else if (sigMoved(c.sig, issue.notifiedSig)) events.push({ type: 'update', issue, before });
+      // A changed detail is news only when that leg's data came through this poll.
+      else if (sigMoved(c.sig, issue.notifiedSig) && !(c.leg !== null && unknown.has(c.leg))) events.push({ type: 'update', issue, before });
       else {
         next[c.key] = issue;
         continue;

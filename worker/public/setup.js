@@ -285,7 +285,12 @@ async function onSearch(e) {
         state.choosing = { morning: null, evening: null };
         state.planning++;
         edited();
-        if (target === 'home') state.terminals = await nearbyFerryTerminals(state.home, fetchJSON, { limit: 2 }).catch(() => []);
+        if (target === 'home') {
+          state.terminals = []; // the old home's terminals must not be used meanwhile
+          const run = state.planning;
+          const found = await nearbyFerryTerminals(state.home, fetchJSON, { limit: 2 }).catch(() => []);
+          if (run === state.planning) state.terminals = found;
+        }
         refreshDirs();
       }),
     );

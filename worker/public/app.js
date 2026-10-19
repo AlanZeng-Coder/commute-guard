@@ -46,10 +46,16 @@ let pushed = { badge: null, at: 0 };
     history.replaceState(null, '', location.pathname);
   }
 }
+// Caught up when the data the push was about is in the status: a watch poll or a result from
+// about the push's time (not just any event logged around then).
 const caughtUp = (s) =>
   !pushed.at ||
   Date.parse(s.now.iso) > pushed.at + 70000 ||
-  s.events.some((e) => Date.parse(e.at) >= pushed.at - 120000);
+  s.days.some(
+    (d) =>
+      Date.parse(d.latest?.checkedAt ?? 0) >= pushed.at - 60000 ||
+      Object.values(d.dirs).some((x) => Date.parse(x?.watch?.lastEventAt ?? 0) >= pushed.at - 60000),
+  );
 
 const md = (date) => date.slice(5).replace('-', '/');
 const clock = (iso) =>
@@ -149,8 +155,10 @@ function focusCard(s) {
   const record = day.latest && (day.latest.dir ?? 'morning') === seg.dir ? day.latest : null;
   // The worse of the watch (rules, realtime) and Claude's latest verdict (which also reads the
   // news and the weather the watch doesn't).
-  // A verdict older than the watch's last change (e.g. a recovery it has pushed since) no longer counts.
-  const counts = record && (issues.length || !w?.lastEventAt || record.checkedAt >= w.lastEventAt);
+  // A verdict that only repeated what the watch saw stops counting once the watch has moved on
+  // (e.g. pushed a recovery); one that went beyond it (news, weather the watch can't see) still counts.
+  const watchOnly = record && record.level === (record.suggestedLevel ?? record.level);
+  const counts = record && (issues.length || !watchOnly || !w?.lastEventAt || record.checkedAt >= w.lastEventAt);
   const judged = [...issues, ...(w ? [{ level: w.level }] : []), ...(counts ? [{ level: record.level }] : [])];
   const level = day.paused ? 'paused' : judged.length ? levelOf(judged) : 'pending';
   const ph = phase(s, day, seg);
@@ -358,7 +366,9 @@ function render(s) {
     currentSubscription()
       .then((sub) => {
         mySub = sub?.endpoint ?? null;
-        const ok = sub && s.push.endpoints.includes(sub.endpoint) && subscriptionMatches(sub, s.push.publicKey) && !pushFailing(s, sub.endpoint);
+        // Re-subscribe when the server doesn't know this phone or the push key changed. A same-key
+        // subscription that is failing isn't fixed by posting it again (its warning stays shown).
+        const ok = sub && s.push.endpoints.includes(sub.endpoint) && subscriptionMatches(sub, s.push.publicKey);
         if (ok) return;
         resubscribed = true;
         return enablePush(s.push.publicKey).then((fresh) => {
@@ -398,17 +408,15 @@ function bind(s) {
   });
   // Each button sends the whole list, so all of them wait until the page has reloaded.
   const pauseButtons = [...app.querySelectorAll('#toggle-pause, [data-resume]')];
-  const savePause = async (dates) => {
+  // One date at a time, applied to the server's list, so a stale page can't undo another tap.
+  const savePause = async (change) => {
     for (const b of pauseButtons) b.disabled = true;
-    await api('/api/pause', { method: 'PUT', body: { dates } }).catch((err) => alert(err.message));
+    const r = await api('/api/pause', { method: 'PUT', body: change }).catch((err) => alert(err.message));
+    if (r?.dates && last) last.pause = { dates: r.dates };
     await load();
   };
-  document.getElementById('toggle-pause')?.addEventListener('click', (e) =>
-    savePause([...new Set([...s.pause.dates, e.currentTarget.dataset.date])]),
-  );
-  for (const b of pauseButtons.filter((x) => x.dataset.resume)) {
-    b.addEventListener('click', () => savePause(s.pause.dates.filter((d) => d !== b.dataset.resume)));
-  }
+  document.getElementById('toggle-pause')?.addEventListener('click', (e) => savePause({ add: e.currentTarget.dataset.date }));
+  for (const b of pauseButtons.filter((x) => x.dataset.resume)) b.addEventListener('click', () => savePause({ remove: b.dataset.resume }));
   document.getElementById('test-push')?.addEventListener('click', async () => {
     msg('发送中…');
     const r = await api('/api/test-push', { method: 'POST' }).catch((e) => ({ error: e.message }));

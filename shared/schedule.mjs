@@ -91,12 +91,9 @@ export function tripFor(route, date, dir, replanned = null) {
   const time = departureFor(route, date, dir);
   const set = route?.[dir];
   if (!time || !set) return null;
-  // A re-plan counts only for the current time and lines, and only if made after the route was last saved.
-  const fresh =
-    replanned &&
-    replanned.time === time &&
-    replanned.pattern === set.pattern &&
-    (!route.savedAt || !replanned.plannedAt || replanned.plannedAt >= route.savedAt);
+  // A re-plan counts only while what it was planned from still holds (time, lines, chosen boat,
+  // addresses) — an unrelated save doesn't throw it away.
+  const fresh = replanned && replanned.inputs === planInputs(route, dir, time);
   const saved = set.byTime?.[time];
   let plan = fresh && replanned.primary ? replanned : saved;
   let source = fresh && replanned.primary ? 'replanned' : 'saved';
@@ -175,6 +172,13 @@ export function watchWindow(route, date, dir, trip) {
  * gap after leaving that their other saved trips have. Re-planning aims for it so a later boat
  * the user deliberately picked isn't swapped for the earliest one on the same lines.
  */
+/** Everything a day's re-plan depends on; a stored re-plan is current while this is unchanged. */
+export function planInputs(route, dir, time) {
+  const set = route?.[dir];
+  const at = (p) => (p ? `${p.lat},${p.lon}` : '');
+  return [time, set?.pattern, linesOf(set?.byTime?.[time]?.primary), preferredBoarding(set, time), at(route?.home), at(route?.work)].join('|');
+}
+
 /** The lines an itinerary uses, in order ("SB:SEA>N"). */
 export const linesOf = (itinerary) =>
   (itinerary?.legs ?? [])

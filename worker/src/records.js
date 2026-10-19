@@ -1,6 +1,7 @@
 // Check results: Claude's verdicts (POSTed by the routine) and the Worker's own rule-based
 // result when Claude didn't answer in time. Both are stored per commute day and pushed alike.
 
+import { openIssues } from '../../checker/lib/issues.mjs';
 import { DEFAULT_NOTIFY, LEVELS, MODES, checkByMode } from '../../shared/schedule.mjs';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -26,6 +27,22 @@ export async function saveRecord(store, record) {
   list.sort((a, b) => MODES.indexOf(a.mode) - MODES.indexOf(b.mode));
   await store.putChecks(record.targetDate, list);
   return true;
+}
+
+const RANK = { green: 0, yellow: 1, red: 2 };
+
+/**
+ * Why a result must not be pushed (now or on a retry), or null: the watch has pushed a worse
+ * problem after the result's data was taken, or (for a retry, `since`) anything after the first
+ * attempt — an older message must not become the last word on the phone.
+ */
+export async function supersededBy(store, record, since = null) {
+  const watch = record.dir ? await store.watch(record.targetDate, record.dir) : null;
+  if (since && watch?.lastEventAt && watch.lastEventAt > since) return '之后又推送过更新的消息';
+  const newer = record.digestAt
+    ? openIssues(watch?.issues).filter((i) => (i.notifiedAt ?? i.firstSeen) > record.digestAt && RANK[i.notified] > RANK[record.level])
+    : [];
+  return newer.length ? `分析之后又发现：${newer.map((i) => i.text).join('；')}` : null;
 }
 
 /** Problems always reach the phone; a green result only for the checks the user wants. */

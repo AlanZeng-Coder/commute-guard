@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { planDay, planOptions } from '../../shared/transitous.mjs';
-import { tripFor } from '../../shared/schedule.mjs';
+import { planInputs, tripFor } from '../../shared/schedule.mjs';
 import { collect } from '../collect.mjs';
 import { createFixtureSource } from '../lib/fixtures.mjs';
 
@@ -74,7 +74,7 @@ test('re-planning keeps the boat the user chose, not the earliest on the same li
 
 test('when tonight\'s re-plan finds the user\'s lines aren\'t running, the check says so', async () => {
   const route = routeOf('normal');
-  const replanned = { primary: null, notOffered: true, time: '06:30', pattern: route.morning.pattern };
+  const replanned = { primary: null, notOffered: true, time: '06:30', pattern: route.morning.pattern, inputs: planInputs(route, 'morning', '06:30') };
   assert.equal(tripFor(route, '2026-10-14', 'morning', replanned).notOffered, true);
   const source = { ...createFixtureSource(join(fixtures, 'normal')), plan: async () => replanned };
   const d = await collect({ mode: 'night', now: new Date('2026-10-14T04:30:00Z'), source });
@@ -92,7 +92,7 @@ test('a re-plan that makes the user late is flagged, not just shown as a time', 
     endLocal: shift(saved.primary.endLocal),
     legs: saved.primary.legs.map((l) => ({ ...l, depLocal: shift(l.depLocal), arrLocal: shift(l.arrLocal) })),
   };
-  const replanned = { primary: later, alternatives: [], time: '06:30', pattern: route.morning.pattern };
+  const replanned = { primary: later, alternatives: [], time: '06:30', pattern: route.morning.pattern, inputs: planInputs(route, 'morning', '06:30') };
   const source = { ...createFixtureSource(join(fixtures, 'normal')), plan: async () => replanned };
   const d = await collect({ mode: 'night', now: new Date('2026-10-14T04:30:00Z'), source });
   assert.equal(d.suggestedLevel, 'yellow');

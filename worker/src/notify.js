@@ -27,6 +27,7 @@ export function vapidOf(env) {
  */
 export async function openCount(store, now, override = {}) {
   const date = pacificDate(now);
+  if ((await store.pause()).dates.includes(date)) return 0;
   let n = 0;
   for (const dir of DIRS) {
     const w = await store.watch(date, dir);
@@ -117,7 +118,8 @@ export async function notify(env, store, now, msgs, { log = true, logFailed = tr
       ntfy: ntfyResult,
     });
   }
-  if (subsChanged) await store.putSubs(subs);
+  // Failure counts are bookkeeping: a write conflict must not fail the delivery that already happened.
+  if (subsChanged) await store.putSubs(subs).catch((err) => console.error('subs write failed', err));
 
   if (log) {
     const today = pacificDate(now);

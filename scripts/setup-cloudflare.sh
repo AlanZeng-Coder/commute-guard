@@ -11,7 +11,7 @@ cd "$ROOT/worker"
 touch "$ENV_FILE"
 # A hand-edited .env may lack a final newline; appending would glue two lines together.
 if [ -s "$ENV_FILE" ] && [ -n "$(tail -c1 "$ENV_FILE")" ]; then echo >> "$ENV_FILE"; fi
-get() { grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- || true; }
+get() { grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- | tr -d '\r' || true; }
 put() {
   if grep -qE "^$1=" "$ENV_FILE"; then sed -i.bak "s|^$1=.*|$1=$2|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
   else echo "$1=$2" >> "$ENV_FILE"; fi
@@ -60,7 +60,7 @@ secrets="$(mktemp)"; trap 'rm -f "$secrets"' EXIT
 node --input-type=module -e '
   import { readFileSync } from "node:fs";
   const env = Object.fromEntries(
-    readFileSync(process.argv[1], "utf8").split("\n").map((l) => l.match(/^([A-Z0-9_]+)=(.*)$/)).filter(Boolean).map((m) => [m[1], m[2]]),
+    readFileSync(process.argv[1], "utf8").split(/\r?\n/).map((l) => l.match(/^([A-Z0-9_]+)=(.*)$/)).filter(Boolean).map((m) => [m[1], m[2]]),
   );
   // Worker secret name → .env name
   const names = { APP_PASSCODE: "APP_PASSCODE", WRITE_TOKEN: "CG_WRITE_TOKEN", VAPID_PUBLIC_KEY: "VAPID_PUBLIC_KEY",
