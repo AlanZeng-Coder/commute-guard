@@ -2,7 +2,7 @@
 // Claude reads the digest and makes the final call; this layer only does what rules can do
 // reliably (id matching, time windows, cancellations, missing predictions).
 
-import { DIR_LABEL, checkByMode, commutesOn, dayTimes, fromMin, toMin } from '../../shared/schedule.mjs';
+import { DIR_LABEL, NIGHT_AFTER_MIDNIGHT_UNTIL, checkByMode, commutesOn, dayTimes, fromMin, toMin } from '../../shared/schedule.mjs';
 import { addDays, pacificDate, pacificHHMM, pacificToDate } from '../../shared/time.mjs';
 import { idKey } from './normalize.mjs';
 import { realtimeKinds } from './gather.mjs';
@@ -56,12 +56,12 @@ function overlaps(periods, [ws, we]) {
 
 // ---------- alerts ----------
 
-function relevanceOf(alert, leg) {
+/** tripKeys: ids the user's own run is known by (the saved plan's, and the one 511's timetable matched). */
+function relevanceOf(alert, leg, tripKeys) {
   const rk = routeKeys(leg);
   const sk = [...stopKeys(leg.from), ...stopKeys(leg.to)];
-  const tk = idKey(leg.tripId);
   let best = null;
-  const order = ['agency', 'route-otherstop', 'stop', 'route', 'trip'];
+  const order = ['other-trip', 'agency', 'route-otherstop', 'stop', 'route', 'trip'];
   const bump = (r) => {
     if (!best || order.indexOf(r) > order.indexOf(best)) best = r;
   };
@@ -69,8 +69,13 @@ function relevanceOf(alert, leg) {
     if (ie.agencyId && leg.agencyId && idKey(ie.agencyId) !== idKey(leg.agencyId)) continue;
     const routeHit = ie.routeId ? rk.includes(idKey(ie.routeId)) : null;
     const stopHit = ie.stopId ? sk.includes(idKey(ie.stopId)) : null;
-    if (ie.tripId && tk && idKey(ie.tripId) === tk) bump('trip');
-    else if (routeHit === false) continue;
+    if (routeHit === false) continue;
+    // A trip-level entity names one departure: ours, another run on the same line, or — when we
+    // don't know which run is ours — possibly ours, so it counts like the route.
+    if (ie.tripId) {
+      bump(!tripKeys.length ? 'route' : tripKeys.includes(idKey(ie.tripId)) ? 'trip' : 'other-trip');
+      continue;
+    }
     else if (routeHit && stopHit === false) bump('route-otherstop');
     else if (routeHit) bump('route');
     else if (stopHit) bump('stop');
@@ -80,6 +85,7 @@ function relevanceOf(alert, leg) {
 }
 
 function alertSeverity(alert, relevance) {
+  if (relevance === 'other-trip') return 'info';
   const direct = relevance === 'trip' || relevance === 'route' || relevance === 'stop';
   if (direct) {
     if (NO_SERVICE.has(alert.effect)) return 'red';
@@ -89,11 +95,11 @@ function alertSeverity(alert, relevance) {
   return AGENCY_WIDE_BAD.has(alert.effect) ? 'yellow' : 'info';
 }
 
-function matchAlerts(alerts, leg, window) {
+function matchAlerts(alerts, leg, window, tripKeys = [idKey(leg.tripId)].filter(Boolean)) {
   const out = [];
   for (const a of alerts ?? []) {
     if (!overlaps(a.activePeriods, window)) continue;
-    const relevance = relevanceOf(a, leg);
+    const relevance = relevanceOf(a, leg, tripKeys);
     if (!relevance) continue;
     const words = [...new Set(`${a.header} ${a.description}`.match(ALARM_WORDS) ?? [])];
     out.push({
@@ -115,7 +121,13 @@ function matchAlerts(alerts, leg, window) {
 
 // ---------- realtime ----------
 
-function ferryRealtime(leg, planned, data) {
+/**
+ * The user's boat at the boarding terminal. Terminals serve both directions (the morning boat's
+ * destination is where the evening boat leaves), so calls are matched to the direction of the
+ * user's own departure, and only trips for this service day count.
+ * `suspended`: the line has a no-service alert, so no "next boat" is promised.
+ */
+function ferryRealtime(leg, planned, data, { date, suspended = false }) {
   const ag = leg.agencyId;
   const key = `${ag}:${leg.from.stopCode || leg.from.stopId}`;
   const rk = routeKeys(leg);
@@ -123,36 +135,62 @@ function ferryRealtime(leg, planned, data) {
   const lineOk = (line) => !line || rk.includes(idKey(line));
   const out = { kind: 'ferry', plannedDep: fmt(planned), tripRef: null, status: 'unknown', delayMin: null };
 
-  const tt = data.timetable[key];
-  if (Array.isArray(tt)) {
-    const near = tt
-      .filter((v) => v.aimed && lineOk(v.line) && Math.abs(v.aimed - planned) <= 15 * 60)
-      .sort((a, b) => Math.abs(a.aimed - planned) - Math.abs(b.aimed - planned));
-    if (near[0]) out.tripRef = near[0].journeyRef;
-  }
+  const tt = Array.isArray(data.timetable[key]) ? data.timetable[key].filter((v) => v.aimed && lineOk(v.line)) : null;
+  // Calls that only arrive here (a boat ending its trip) are never the user's departure.
+  const departing = tt?.filter((v) => v.departs !== false) ?? null;
+  const legTrip = idKey(leg.tripId);
+  const mineTT = tt
+    ? ((legTrip && tt.find((v) => idKey(v.journeyRef) === legTrip)) ??
+      departing
+        .filter((v) => Math.abs(v.aimed - planned) <= 15 * 60)
+        .sort((a, b) => Math.abs(a.aimed - planned) - Math.abs(b.aimed - planned))[0] ??
+      null)
+    : null;
+  if (mineTT) out.tripRef = mineTT.journeyRef;
+  const direction = mineTT?.direction ?? null;
+  const sameDir = (v) => !direction || !v.direction || v.direction === direction;
+  // Without a timetable we can't tell which trips call here in the user's direction.
+  const servesHere = (tripId) => !tt?.length || tt.some((v) => idKey(v.journeyRef) === idKey(tripId) && sameDir(v));
+  const serviceDay = date.replaceAll('-', '');
+  const thisDay = (t) => !t.startDate || t.startDate === serviceDay;
 
   const tus = data.tripUpdates[ag];
   if (Array.isArray(tus)) {
     const onRoute = (t) => !t.routeId || rk.includes(idKey(t.routeId));
-    let mine = out.tripRef ? tus.find((t) => idKey(t.tripId) === idKey(out.tripRef)) : null;
-    mine ??= tus.find((t) =>
-      t.stops.some(
-        (s) => fk.includes(idKey(s.stopId)) && s.depTime && Math.abs(s.depTime - (s.depDelay ?? 0) - planned) <= 5 * 60,
-      ),
-    );
-    // Cancelled trips often carry no stop updates; fall back to the trip's start time.
+    const ref = out.tripRef ?? legTrip;
+    let mine = ref ? tus.find((t) => idKey(t.tripId) === idKey(ref) && thisDay(t)) : null;
     mine ??= tus.find(
       (t) =>
-        t.relationship === 'CANCELED' &&
-        onRoute(t) &&
-        t.startTime &&
-        Math.abs(epoch(pacificDate(new Date(planned * 1000)), t.startTime.slice(0, 5)) - planned) <= 3 * 60,
+        thisDay(t) &&
+        servesHere(t.tripId) &&
+        t.stops.some(
+          (s) => fk.includes(idKey(s.stopId)) && s.depTime && Math.abs(s.depTime - (s.depDelay ?? 0) - planned) <= 5 * 60,
+        ),
     );
+    // Cancelled trips often carry no stop updates. When the timetable didn't identify our trip,
+    // fall back to the trip's start time.
+    let byStartTime = false;
+    if (!mine && !mineTT) {
+      mine =
+        tus.find(
+          (t) =>
+            t.relationship === 'CANCELED' &&
+            onRoute(t) &&
+            thisDay(t) &&
+            servesHere(t.tripId) &&
+            t.startTime &&
+            Math.abs(epoch(date, t.startTime.slice(0, 5)) - planned) <= 3 * 60,
+        ) ?? null;
+      byStartTime = Boolean(mine);
+    }
     out.canceledOnRoute = tus
-      .filter((t) => t.relationship === 'CANCELED' && onRoute(t))
+      .filter((t) => t.relationship === 'CANCELED' && onRoute(t) && thisDay(t) && servesHere(t.tripId))
       .map((t) => ({ tripId: t.tripId, startTime: t.startTime }));
     if (mine) {
       out.tripRef ??= mine.tripId;
+      // Matched only by start time (no timetable, ids differ): it may be another boat, e.g. one
+      // leaving the other terminal at that time.
+      out.uncertain = byStartTime;
       if (mine.relationship === 'CANCELED') out.status = 'canceled';
       else {
         out.status = 'tracked';
@@ -168,37 +206,66 @@ function ferryRealtime(leg, planned, data) {
 
   const sv = data.stopVisits[key];
   if (Array.isArray(sv)) {
+    // StopMonitoring uses other direction codes than the timetable ('OB' vs 'SF'), so visits are
+    // matched by journey id when 511 gives one, else by time.
     const mineVisits = sv.filter((v) => lineOk(v.line));
     out.upcoming = mineVisits.slice(0, 4).map((v) => ({ line: v.line, aimed: fmt(v.aimed), expected: fmt(v.expected) }));
-    const near = mineVisits
-      .filter((v) => v.aimed && Math.abs(v.aimed - planned) <= 15 * 60)
-      .sort((a, b) => Math.abs(a.aimed - planned) - Math.abs(b.aimed - planned))[0];
+    const near =
+      (out.tripRef && mineVisits.find((v) => v.journeyRef && idKey(v.journeyRef) === idKey(out.tripRef))) ??
+      mineVisits
+        .filter((v) => v.aimed && Math.abs(v.aimed - planned) <= 15 * 60)
+        .sort((a, b) => Math.abs(a.aimed - planned) - Math.abs(b.aimed - planned))[0];
     if (near?.expected && out.delayMin === null) {
       out.delayMin = Math.round((near.expected - near.aimed) / 60);
       if (out.status === 'unknown') out.status = 'tracked';
     }
   }
 
-  // The next boat on this line after yours that isn't cancelled — what the user would take instead.
-  if (Array.isArray(tt)) {
+  // Later boats in the user's direction that aren't cancelled — what they would take instead.
+  if (departing) {
     const canceled = new Set((out.canceledOnRoute ?? []).map((t) => idKey(t.tripId)));
-    const next = tt
-      .filter((v) => v.aimed > planned + 60 && lineOk(v.line) && !canceled.has(idKey(v.journeyRef)))
-      .sort((a, b) => a.aimed - b.aimed)[0];
-    out.nextDep = fmt(next?.aimed) ?? null;
+    out.later = suspended
+      ? []
+      : departing
+          .filter((v) => sameDir(v) && v.aimed > planned + 60 && !canceled.has(idKey(v.journeyRef)))
+          .sort((a, b) => a.aimed - b.aimed)
+          .slice(0, 6)
+          .map((v) => ({ time: fmt(v.aimed), ref: v.journeyRef }));
+    out.laterDeps = out.later.map((v) => v.time);
+    out.nextDep = out.laterDeps[0] ?? null;
   }
 
   // `key` identifies the condition across polls (the Worker's watch diffs them); text may change.
+  // `sig` changing on an already-notified problem is worth telling the user again (a different
+  // next boat; a delay growing by another 10 minutes).
   const flags = [];
   const label = `${out.plannedDep} 那班 ${leg.routeShortName ?? ''} 船`;
   const instead = out.nextDep ? `，下一班 ${out.nextDep}` : '';
-  if (out.status === 'canceled') flags.push({ level: 'red', key: 'ferry:canceled', text: `${label}已取消${instead}` });
-  else if (out.status === 'skips-your-stop')
-    flags.push({ level: 'red', key: 'ferry:skips', text: `${label}不停 ${leg.from.name}${instead}` });
-  if (out.delayMin !== null && out.delayMin >= 30)
-    flags.push({ level: 'red', key: 'ferry:delay', text: `${label}预计晚 ${out.delayMin} 分钟` });
-  else if (out.delayMin !== null && out.delayMin >= 10)
-    flags.push({ level: 'yellow', key: 'ferry:delay', text: `${label}预计晚 ${out.delayMin} 分钟` });
+  if (out.status === 'canceled') {
+    flags.push(
+      out.uncertain
+        ? { level: 'yellow', key: 'ferry:canceled', sig: out.nextDep ?? '', text: `${label}可能已取消（只按出发时间对上，没法确认是不是你这班）${instead}` }
+        : { level: 'red', key: 'ferry:canceled', sig: out.nextDep ?? '', text: `${label}已取消${instead}` },
+    );
+  } else if (out.status === 'skips-your-stop') {
+    flags.push({ level: 'red', key: 'ferry:skips', sig: out.nextDep ?? '', text: `${label}不停 ${leg.from.name}${instead}` });
+  } else if (tt && !mineTT && out.status === 'unknown') {
+    // The timetable came back but has no such boat (or none on this line at all): holiday or a schedule change.
+    flags.push({
+      level: 'yellow',
+      key: 'ferry:not-in-timetable',
+      sig: out.nextDep ?? '',
+      text: tt.length ? `今天的时刻表里没有 ${label}（可能改了班表）${instead}` : `今天的时刻表里没有 ${leg.routeShortName ?? ''} 船在 ${leg.from.name} 开（可能停航或改了班表）`,
+    });
+  }
+  if (out.delayMin !== null && out.delayMin >= 10) {
+    flags.push({
+      level: out.delayMin >= 30 ? 'red' : 'yellow',
+      key: 'ferry:delay',
+      sig: Math.floor(out.delayMin / 10),
+      text: `${label}预计晚 ${out.delayMin} 分钟`,
+    });
+  }
   const others = (out.canceledOnRoute ?? []).filter((t) => idKey(t.tripId) !== idKey(out.tripRef));
   if (others.length && out.status !== 'canceled') {
     flags.push({
@@ -236,20 +303,29 @@ function lineRealtime(leg, planned, nowSec, data, mode) {
     .slice(0, 5)
     .map((v) => ({
       expected: fmt(t(v)),
+      aimed: fmt(v.aimed ?? t(v)),
       delayMin: v.expected && v.aimed ? Math.round((v.expected - v.aimed) / 60) : null,
       destination: v.destination,
     }));
   const nearPlan = mine.filter((v) => t(v) >= planned - 20 * 60 && t(v) <= planned + 40 * 60);
   const nearNow = mine.filter((v) => t(v) >= nowSec && t(v) <= nowSec + 60 * 60);
+  // Close to departure, nothing near the planned time is a gap in service (the planned run is
+  // missing) — judged on the planned time, so it doesn't "clear" just because the clock moves on.
+  const soon = planned - nowSec <= 45 * 60;
+  // The next vehicle still to come (the feed can still list one that just left).
+  const next = mine.find((v) => t(v) >= Math.max(nowSec, planned - 20 * 60)) ?? mine.at(-1);
   if (nearPlan.length) out.status = 'running';
-  else if (nearNow.length) out.status = 'running-now';
-  else if (mine.length) {
+  else if (mine.length && soon) {
     out.status = 'sparse';
     flags.push({
-      level: 'info',
-      key: 'line:sparse',
-      text: `${leg.routeShortName} 在 ${leg.from.name} 的下一班预测要到 ${fmt(t(mine[0]))}`,
+      level: 'yellow',
+      key: 'line:gap',
+      text: `${leg.from.name} 站 ${fmt(planned)} 附近没有 ${leg.routeShortName}，下一班要到 ${fmt(t(next))}`,
     });
+  } else if (nearNow.length) out.status = 'running-now';
+  else if (mine.length) {
+    out.status = 'sparse';
+    flags.push({ level: 'info', key: 'line:sparse', text: `${leg.routeShortName} 在 ${leg.from.name} 的下一班预测要到 ${fmt(t(next))}` });
   } else {
     out.status = 'no-predictions';
     flags.push({
@@ -302,62 +378,152 @@ function analyzeWeather(weather, window) {
 
 // ---------- arrival estimate ----------
 
+// Red flags that still leave a way through (a later boat, a late boat). Any other red flag on a
+// leg — a line- or stop-wide no-service alert — means there is no arrival time to estimate.
+const PASSABLE_RED = new Set(['ferry:canceled', 'ferry:skips', 'ferry:delay']);
+const passable = (f) => f.level !== 'red' || PASSABLE_RED.has(f.key) || f.relevance === 'trip';
+
 /**
- * Move the planned arrival by what realtime says: a late boat, or a cancelled one (take the
- * next), then the first predicted Muni/bus after the user can reach that stop.
+ * Move the planned arrival by what realtime says, leg by leg. A boat leaves on its own (possibly
+ * delayed) schedule, so what matters is whether the user reaches the dock in time, else the next
+ * boat; on a Muni/bus leg, the vehicle the user is waiting for (or the first after they arrive).
+ *
+ * Feeds forget a leg once it is over (passed stops and departed trips drop out, a cancelled trip
+ * disappears after its time), so each leg remembers what was worked out (`prev`, the previous
+ * poll's timing.legs) and keeps it when the feed has gone quiet — but never when the feed still
+ * reports something newer about that leg.
+ *
+ * Returns the timing plus `legFlags`: boat-change flags that belong to a leg (missed connection,
+ * the replacement boat cancelled too), merged into that leg's flags by the caller.
  */
-function estimateArrival(trip, legsOut) {
+function estimateArrival(trip, legsOut, { nowMin = null, prev = null } = {}) {
   const p = trip.primary;
   const basis = [];
+  const flags = [];
+  const states = [];
+  const legFlags = {};
   let shift = 0;
   let known = true;
   let ti = 0;
+  const flagLeg = (idx, f) => (legFlags[idx] ??= []).push(f);
   p.legs.forEach((leg, i) => {
     if (!leg.transit) return;
-    const out = legsOut[ti++];
+    const idx = ti++;
+    if (!known) {
+      states.push(null);
+      return;
+    }
+    const out = legsOut[idx];
     const rt = out?.realtime;
-    if (!known) return;
+    const before = prev?.[idx]?.shift != null ? prev[idx] : null;
     const dep = toMin(leg.depLocal);
-    // A leg that is down (suspended, no service) has no arrival time to estimate —
-    // except a cancelled boat, where the next boat gives one.
-    const boatHandled = rt?.kind === 'ferry' && (rt.status === 'canceled' || rt.status === 'skips-your-stop');
-    if (out?.level === 'red' && !boatHandled) {
-      known = false;
-      return;
-    }
-    if (!rt) return;
-    if (rt.kind === 'ferry') {
-      if (rt.status === 'canceled' || rt.status === 'skips-your-stop') {
-        if (!rt.nextDep) {
-          known = false;
-          return;
-        }
-        shift = Math.max(shift, toMin(rt.nextDep) - dep);
-        basis.push(`改坐 ${rt.nextDep} 的船`);
-      } else if (rt.delayMin > 0) {
-        shift = Math.max(shift, rt.delayMin);
-        basis.push(`船晚 ${rt.delayMin} 分钟`);
-      }
-      return;
-    }
-    if (rt.status !== 'running' && rt.status !== 'running-now') return;
     const ready = toMin(p.legs[i - 1]?.arrLocal ?? leg.depLocal) + shift;
-    const next = rt.upcoming
-      .map((u) => toMin(u.expected))
-      .filter((m) => m >= ready)
-      .sort((a, b) => a - b)[0];
-    if (next === undefined) return;
-    shift = next - dep;
-    basis.push(`${leg.routeShortName ?? ''} 预计 ${fromMin(next)} 开`);
+    const set = (state) => {
+      states.push(state);
+      if (state.shift === null) known = false;
+      else shift = state.shift;
+      if (state.note) basis.push(state.note);
+      if (state.flag) flagLeg(idx, state.flag);
+    };
+    const down = () => set({ shift: null, boardAt: dep, informed: true, note: null });
+    if (!(out?.flags ?? []).every(passable)) return down();
+    // Without realtime: on time if the user is there in time, else assume the lateness carries over.
+    const plain = { shift: ready > dep ? shift : 0, boardAt: ready > dep ? dep + shift : dep, informed: false, note: null };
+
+    if (rt?.kind === 'ferry') {
+      const later = rt.later ?? [];
+      const nextBoat = (from) => later.find((x) => toMin(x.time) >= from);
+      const take = (next, note, flag) =>
+        next
+          ? set({ shift: toMin(next.time) - dep, boardAt: toMin(next.time), boardRef: next.ref, informed: true, note, flag })
+          : down();
+      const gone =
+        rt.status === 'canceled' ||
+        rt.status === 'skips-your-stop' ||
+        out.flags.some((f) => (f.level === 'red' && f.relevance === 'trip') || f.key === 'ferry:not-in-timetable');
+      const tracked = rt.status === 'tracked' && rt.delayMin !== null;
+      // Once the user has switched to a later boat, news about the original one no longer applies
+      // (feeds can keep listing it); and when the feed goes quiet, what we knew still holds. Only
+      // the boat they switched to being cancelled too changes things.
+      if (!gone && (before?.boardRef || (!tracked && before?.informed))) {
+        const replaced = before.boardRef && (rt.canceledOnRoute ?? []).some((t) => idKey(t.tripId) === idKey(before.boardRef));
+        if (!replaced) return set(before);
+        const next = nextBoat(before.boardAt + 1);
+        return take(
+          next,
+          next && `改坐 ${next.time} 的船`,
+          next && {
+            level: 'red',
+            key: 'ferry:canceled',
+            sig: next.time,
+            text: `${fromMin(before.boardAt)} 那班也取消了，下一班 ${next.time}`,
+          },
+        );
+      }
+      if (gone) {
+        const next = nextBoat(ready);
+        return take(next, next && `改坐 ${next.time} 的船`);
+      }
+      if (tracked) {
+        const boatDep = dep + Math.max(0, rt.delayMin);
+        if (ready <= boatDep) {
+          return set({ shift: boatDep - dep, boardAt: boatDep, informed: true, note: rt.delayMin > 0 ? `船晚 ${rt.delayMin} 分钟` : null });
+        }
+        const next = nextBoat(ready);
+        return take(next, next && `赶不上 ${leg.depLocal} 的船，坐 ${next.time} 的`, next && missedFlag(leg, ready, next.time));
+      }
+      if (ready > dep && later.length) {
+        // No word on the boat, but the user reaches the dock after it leaves.
+        const next = nextBoat(ready);
+        return take(next, next && `赶不上 ${leg.depLocal} 的船，坐 ${next.time} 的`, next && missedFlag(leg, ready, next.time));
+      }
+      return set(plain);
+    }
+
+    if (rt?.kind === 'line') {
+      const ups = (rt.upcoming ?? []).map((u) => ({ at: toMin(u.expected), aimed: toMin(u.aimed ?? u.expected) }));
+      // The run the user is waiting for is still in the feed: follow its prediction.
+      const same = before?.boardAimed != null ? ups.find((u) => u.aimed === before.boardAimed) : null;
+      if (same) return set({ ...before, shift: same.at - dep, boardAt: same.at, informed: true, note: `${leg.routeShortName ?? ''} 预计 ${fromMin(same.at)} 开` });
+      // That run has left and the user should be on it.
+      if (before && nowMin !== null && nowMin > before.boardAt + 1) return set(before);
+      if (['running', 'running-now', 'sparse'].includes(rt.status)) {
+        const next = ups.filter((u) => u.at >= Math.max(ready, nowMin ?? ready)).sort((a, b) => a.at - b.at)[0];
+        if (next) {
+          return set({ shift: next.at - dep, boardAt: next.at, boardAimed: next.aimed, informed: true, note: `${leg.routeShortName ?? ''} 预计 ${fromMin(next.at)} 开` });
+        }
+      }
+      if (before?.informed) return set(before);
+    }
+    return set(plain);
   });
 
+  // Tonight's re-plan found the trip's lines not running: its timetable arrival means nothing.
+  if (trip.notOffered) known = false;
   const eta = known ? fromMin(toMin(p.endLocal) + shift) : null;
   const lateMin = eta && trip.arriveBy ? toMin(eta) - toMin(trip.arriveBy) : null;
-  const flags = [];
-  if (lateMin > 0 && shift > 0)
-    flags.push({ level: 'yellow', key: 'late', text: `预计 ${eta} 到，比要求的 ${trip.arriveBy} 晚 ${lateMin} 分钟` });
-  else if (lateMin > 0)
-    flags.push({ level: 'info', key: 'plan-late', text: `按计划 ${eta} 到，晚于你要求的 ${trip.arriveBy}` });
+  if (lateMin > 0) {
+    // One key whatever the cause, so "late" never turns into a false "来得及了" when the cause
+    // changes; a lateness the user accepted in setup is only info — unless tonight's re-plan made it.
+    const newlyLate = trip.source === 'replanned' && trip.savedEnd && toMin(trip.savedEnd) <= toMin(trip.arriveBy);
+    if (shift > 0 || newlyLate) {
+      flags.push({
+        level: 'yellow',
+        key: 'late',
+        sig: Math.floor(lateMin / 10),
+        text: shift > 0 ? `预计 ${eta} 到，比要求的 ${trip.arriveBy} 晚 ${lateMin} 分钟` : `班次变了：按新时刻表 ${eta} 才到，晚于要求的 ${trip.arriveBy}`,
+      });
+    } else {
+      flags.push({ level: 'info', key: 'plan-late', text: `按计划 ${eta} 到，晚于你要求的 ${trip.arriveBy}` });
+    }
+  }
+  if (trip.notOffered) {
+    flags.push({
+      level: 'yellow',
+      key: 'plan:not-offered',
+      text: `重新查班次时，没找到你的路线（${p.summary}）${trip.time} 出发的班次：可能是节假日或改了班表`,
+    });
+  }
   return {
     plannedStart: p.startLocal,
     plannedArrival: p.endLocal,
@@ -366,9 +532,18 @@ function estimateArrival(trip, legsOut) {
     shiftMin: known ? shift : null,
     lateMin,
     basis,
+    legs: states,
     flags,
+    legFlags,
   };
 }
+
+const missedFlag = (leg, ready, next) => ({
+  level: 'yellow',
+  key: 'ferry:missed',
+  sig: next,
+  text: `预计 ${fromMin(ready)} 才到${leg.from?.name ?? '码头'}，赶不上 ${leg.depLocal} 的船，下一班 ${next}`,
+});
 
 // ---------- digest ----------
 
@@ -389,10 +564,10 @@ function legSummary(leg) {
 const levelOf = (flags) =>
   flags.reduce((lvl, f) => (RANK[f.level] > RANK[lvl] ? f.level : lvl), 'info');
 
-/** Commute date a check is about: the night check looks at tomorrow. */
+/** Commute date a check is about: the night check looks at tomorrow (or today, after midnight). */
 export function targetDateFor(mode, now) {
   const today = pacificDate(now);
-  return mode === 'night' ? addDays(today, 1) : today;
+  return mode === 'night' && pacificHHMM(now) >= NIGHT_AFTER_MIDNIGHT_UNTIL ? addDays(today, 1) : today;
 }
 
 export function skipReason({ date, dir, route, pause }) {
@@ -405,9 +580,10 @@ export function skipReason({ date, dir, route, pause }) {
 
 /**
  * route: the saved route (schedule, home/work); trip: tripFor(route, date, dir) — the one
- * itinerary (plus alternatives) to judge; gathered: output of gather().
+ * itinerary (plus alternatives) to judge; gathered: output of gather(); prev: the Worker
+ * watch's previous timing.legs, so a leg the user is already on keeps its estimate.
  */
-export function analyze({ mode, now = new Date(), date, dir, route, trip, pause, gathered }) {
+export function analyze({ mode, now = new Date(), date, dir, route, trip, pause, gathered, prev = null }) {
   const check = checkByMode(mode);
   const nowSec = now.getTime() / 1000;
   const base = {
@@ -439,13 +615,21 @@ export function analyze({ mode, now = new Date(), date, dir, route, trip, pause,
     .map((leg) => {
       const dep = epoch(date, leg.depLocal);
       const arr = epoch(date, leg.arrLocal);
-      const alerts = matchAlerts(data.alerts[leg.agencyId], leg, [dep - 30 * 60, arr + 30 * 60]);
+      const window = [dep - 30 * 60, arr + 30 * 60];
+      const tripKeys = [idKey(leg.tripId)].filter(Boolean);
+      let alerts = matchAlerts(data.alerts[leg.agencyId], leg, window, tripKeys);
+      let realtime = null;
+      // A no-service alert for the line or stop (not one departure) means no later boat either.
+      const suspended = alerts.some((a) => a.severity === 'red' && a.relevance !== 'trip');
+      if (isToday && leg.mode === 'FERRY' && rt.ferry) realtime = ferryRealtime(leg, dep, data, { date, suspended });
+      else if (isToday && leg.mode !== 'FERRY' && rt.line) realtime = lineRealtime(leg, dep, nowSec, data, mode);
+      // 511 may know the user's run by another id than the saved plan: match trip-level alerts on it too.
+      if (realtime?.tripRef && !tripKeys.includes(idKey(realtime.tripRef))) {
+        alerts = matchAlerts(data.alerts[leg.agencyId], leg, window, [...tripKeys, idKey(realtime.tripRef)]);
+      }
       const flags = alerts
         .filter((a) => a.severity !== 'info')
-        .map((a) => ({ level: a.severity, key: `alert:${a.id}`, text: `${a.header || a.effect}`, url: a.url }));
-      let realtime = null;
-      if (isToday && leg.mode === 'FERRY' && rt.ferry) realtime = ferryRealtime(leg, dep, data);
-      else if (isToday && leg.mode !== 'FERRY' && rt.line) realtime = lineRealtime(leg, dep, nowSec, data, mode);
+        .map((a) => ({ level: a.severity, key: `alert:${a.id}`, relevance: a.relevance, text: `${a.header || a.effect}`, url: a.url }));
       if (realtime) flags.push(...realtime.flags);
       const stopKey = `${leg.agencyId}:${leg.from.stopCode || leg.from.stopId}`;
       const errs = errors.filter(
@@ -483,7 +667,16 @@ export function analyze({ mode, now = new Date(), date, dir, route, trip, pause,
 
   const weather = analyzeWeather(data.weather, commuteWindow);
   const weatherErrors = errors.filter((e) => e.source.startsWith('NWS'));
-  const timing = estimateArrival(trip, legs);
+  // The night check's main boat risk is wind and fog: not knowing must not read as fine.
+  if (weatherErrors.length) {
+    weather.flags.push({ level: mode === 'night' ? 'yellow' : 'info', key: 'weather:source', text: '天气数据拿不到（NWS 出错），无法确认风浪和大雾' });
+  }
+  const { legFlags, ...timing } = estimateArrival(trip, legs, { nowMin: isToday ? toMin(pacificHHMM(now)) : null, prev });
+  for (const [i, extra] of Object.entries(legFlags)) {
+    const leg = legs[i];
+    for (const f of extra) leg.flags = [...leg.flags.filter((x) => x.key !== f.key), f];
+    leg.level = levelOf(leg.flags);
+  }
 
   const otherAlerts = {};
   for (const [ag, list] of Object.entries(data.alerts)) {
@@ -513,6 +706,7 @@ export function analyze({ mode, now = new Date(), date, dir, route, trip, pause,
       startLocal: p.startLocal,
       endLocal: p.endLocal,
       planSource: trip.source,
+      replanFailed: trip.replanFailed ?? false,
     },
     suggestedLevel,
     reasons,

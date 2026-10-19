@@ -33,6 +33,8 @@ export async function api(path, { method = 'GET', body } = {}) {
   if (res.status === 401) throw new Unauthorized('passcode');
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+  // The service worker answered from its cache because the network didn't.
+  if (data && typeof data === 'object' && res.headers.get('X-From-Cache')) data.fromCache = true;
   return data;
 }
 
@@ -96,7 +98,17 @@ export async function currentSubscription() {
   return reg.pushManager?.getSubscription() ?? null;
 }
 
-/** Must run from a tap (iOS only shows the permission prompt for a user gesture). */
+/** Whether a subscription was made with this VAPID public key (pushes to it would otherwise fail). */
+export function subscriptionMatches(sub, publicKey) {
+  if (!sub) return false;
+  const own = sub.options?.applicationServerKey;
+  if (!own) return true; // the browser doesn't say; assume it matches
+  const a = new Uint8Array(own);
+  const b = keyBytes(publicKey);
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+/** Must run from a tap the first time (iOS only shows the permission prompt for a user gesture). */
 export async function enablePush(publicKey) {
   const perm = await Notification.requestPermission();
   if (perm !== 'granted') {
@@ -105,10 +117,7 @@ export async function enablePush(publicKey) {
   const reg = await navigator.serviceWorker.ready;
   let sub = await reg.pushManager.getSubscription();
   const key = keyBytes(publicKey);
-  const sameKey = sub?.options?.applicationServerKey
-    ? new Uint8Array(sub.options.applicationServerKey).every((b, i) => b === key[i])
-    : Boolean(sub);
-  if (sub && !sameKey) {
+  if (sub && !subscriptionMatches(sub, publicKey)) {
     await sub.unsubscribe();
     sub = null;
   }

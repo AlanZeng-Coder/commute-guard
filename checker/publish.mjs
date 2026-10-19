@@ -37,6 +37,8 @@ export function buildRecord(digest, verdict) {
     planB: verdict.planB ? String(verdict.planB).slice(0, 400) : null,
     details: verdict.details ? String(verdict.details).slice(0, 1500) : null,
     sources: (verdict.sources ?? []).slice(0, 6),
+    // When the data was taken: the Worker won't push a milder verdict over a problem pushed since.
+    digestAt: digest.dataAt ?? digest.generatedAt ?? null,
     suggestedLevel: digest.suggestedLevel,
     reasons: (digest.reasons ?? []).slice(0, 8),
     timing: digest.timing ? { eta: digest.timing.eta, arriveBy: digest.timing.arriveBy, lateMin: digest.timing.lateMin } : null,
@@ -59,7 +61,13 @@ async function main() {
     return;
   }
   const res = await sendJSON(`${workerBase()}/api/status`, 'POST', record, { headers: workerHeaders() });
-  console.log(`published ${record.mode} ${record.targetDate} ${record.level}; push: ${res?.pushed ?? 'n/a'}`);
+  console.log(`published ${record.mode} ${record.targetDate} ${record.level}`);
+  console.log(`push: ${JSON.stringify(res?.pushed ?? null)}${res?.reason ? ` (${res.reason})` : ''}`);
+  if (res?.delivered === false) {
+    // Saved, but nothing reached the phone: the routine must report this, not claim success.
+    console.error('推送没有送达手机（没有订阅，或推送服务出错）。结果已保存在 App 里。');
+    process.exit(1);
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

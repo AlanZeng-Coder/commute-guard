@@ -83,6 +83,7 @@ export function normalizeStopVisits(siri) {
     return {
       line: j.LineRef ?? null,
       lineName: j.PublishedLineName ?? null,
+      direction: j.DirectionRef ?? null,
       destination: j.DestinationName ?? null,
       journeyRef: j.FramedVehicleJourneyRef?.DatedVehicleJourneyRef ?? null,
       aimed: ts(c.AimedDepartureTime ?? c.AimedArrivalTime),
@@ -97,8 +98,11 @@ export function normalizeTimetable(siri) {
     const c = j.TargetedCall ?? {};
     return {
       line: j.LineRef ?? null,
+      direction: j.DirectionRef ?? null,
       journeyRef: j.DatedVehicleJourneyRef ?? j.FramedVehicleJourneyRef?.DatedVehicleJourneyRef ?? null,
       aimed: ts(c.AimedDepartureTime ?? c.AimedArrivalTime),
+      // A call with only an arrival time is a boat ending its trip here, not a departure.
+      departs: Boolean(c.AimedDepartureTime),
     };
   });
 }

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Local stand-ins for 511 (fixture scenarios served as real protobuf / SIRI JSON) and for a
 // browser push service (records and decrypts what the Worker sends), for trying the Worker
-// end to end with `npm run dev`. Set API_511_BASE=http://127.0.0.1:8788 in worker/.dev.vars.
+// end to end with `npm run dev`. In worker/.dev.vars set API_511_KEY=dev-mock (any non-empty
+// value) and API_511_BASE=http://127.0.0.1:8788.
 //   node scripts/mock-511.mjs
 //   POST /__scenario?name=muni-down   switch the 511 scenario
 //   GET  /__pushes                    decrypted push messages received so far

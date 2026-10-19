@@ -9,8 +9,22 @@ import { targetDateFor } from '../../checker/lib/analyze.mjs';
 import { buildDigest } from '../../checker/lib/digest.mjs';
 import { getJSON } from '../../checker/lib/http.mjs';
 import { createLiveSource } from '../../checker/lib/source.mjs';
-import { DEFAULT_NOTIFY, DIRS, HHMM, MODES, checkByMode, departureFor, dirAt, tripFor, watchWindow } from '../../shared/schedule.mjs';
-import { pacificDate, pacificHHMM } from '../../shared/time.mjs';
+import { openIssues } from '../../checker/lib/issues.mjs';
+import {
+  DEFAULT_NOTIFY,
+  DIRS,
+  HHMM,
+  MODES,
+  checkByMode,
+  dayTimes,
+  departureFor,
+  dirAt,
+  linesOf,
+  preferredBoarding,
+  tripFor,
+  watchWindow,
+} from '../../shared/schedule.mjs';
+import { addDays, pacificDate, pacificHHMM } from '../../shared/time.mjs';
 import { planDay } from '../../shared/transitous.mjs';
 import { poll, tick } from './monitor.js';
 import { notify } from './notify.js';
@@ -21,7 +35,6 @@ import { createStore } from './store.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MIN = 60000;
-const SNAPSHOT_FRESH_MIN = 8;
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -48,12 +61,29 @@ async function roleOf(request, env) {
 
 // ---------- data sources ----------
 
-/** Live 511/NWS plus KV-backed route data; a ferry terminal's timetable is fetched once a day. */
+const BUDGET_PER_HOUR = 60; // 511 calls per key per hour
+const BUDGET_RESERVE = 15; // below this many left, checks reuse the watch's data instead of fetching
+const SNAPSHOT_FRESH_MIN = 12; // the watch polls every 10 minutes
+
+/**
+ * Live 511/NWS plus KV-backed route data. Counts its 511 calls; flush() adds them to the hour's
+ * usage. A ferry terminal's timetable is fetched once a day.
+ */
 function workerSource(env, store, now) {
   const live = createLiveSource({ key511: env.API_511_KEY, base511: env.API_511_BASE || undefined });
   const today = pacificDate(now);
+  let calls = 0;
+  const counted =
+    (fn) =>
+    (...args) => {
+      calls++;
+      return fn(...args);
+    };
   return {
     ...live,
+    alerts: counted(live.alerts),
+    tripUpdates: counted(live.tripUpdates),
+    stopVisits: counted(live.stopVisits),
     route: () => store.route(),
     pause: () => store.pause(),
     plan: (date, dir) => store.plan(date, dir),
@@ -61,17 +91,24 @@ function workerSource(env, store, now) {
       const key = `tt:${today}:${agency}:${stopCode}`;
       const cached = await store.get(key);
       if (cached) return cached;
+      calls++;
       const list = await live.timetable(agency, stopCode);
       await store.put(key, list, 2);
       return list;
     },
+    count: () => calls,
+    async flush() {
+      const n = calls;
+      calls = 0;
+      await store.addUsed511(now, n);
+    },
   };
 }
 
-/** Serve realtime from the watch's latest poll while it is only a few minutes old. */
-function withSnapshot(source, watch, now) {
+/** Serve realtime from the watch's latest poll instead of calling 511 again. */
+function withSnapshot(source, watch, now, maxAgeMin) {
   const snap = watch?.snapshot;
-  if (!snap || now - new Date(snap.at) > SNAPSHOT_FRESH_MIN * MIN) return source;
+  if (!snap || now - new Date(snap.at) > maxAgeMin * MIN) return source;
   const { alerts, tripUpdates, stopVisits } = snap.data;
   const cached = (value, fetch) => (value ? Promise.resolve(value) : fetch());
   return {
@@ -82,17 +119,51 @@ function withSnapshot(source, watch, now) {
   };
 }
 
-/** Plan `date` again with Transitous and keep the option with the user's chosen lines. */
+/**
+ * The source for a check (Claude's digest, the Worker's fallback): reuses the trip's latest poll
+ * while it is fresh — or up to an hour old, skipping the alternatives' alerts, when the hour's
+ * 511 budget is nearly spent.
+ */
+async function checkSource(env, store, now, date, dir) {
+  const tight = BUDGET_PER_HOUR - (await store.used511(now)) < BUDGET_RESERVE;
+  const watch = await store.watch(date, dir);
+  const maxAge = tight ? 60 : SNAPSHOT_FRESH_MIN;
+  const source = withSnapshot(workerSource(env, store, now), watch, now, maxAge);
+  if (tight) source.gatherOptions = { alternatives: false };
+  // When the realtime came from the watch's poll, the data is as old as that poll.
+  const snap = watch?.snapshot;
+  const snapshotAt = snap && now - new Date(snap.at) <= maxAge * MIN ? snap.at : null;
+  return { source, tight, watch, snapshotAt };
+}
+
+/**
+ * Plan `date` again with Transitous: the option on the user's lines that boards closest to the
+ * boat they chose. { notOffered } when Transitous answered but those lines don't run then.
+ * Throws when the planner itself failed (the caller retries).
+ */
 async function replan(route, date, dir, now) {
   const time = departureFor(route, date, dir);
   const set = route[dir];
   if (!time || !set?.pattern) return null;
   // Terminals near home: walked to in the morning, walked home from in the evening.
   const [from, to, terminalSide] = dir === 'morning' ? [route.home, route.work, 'from'] : [route.work, route.home, 'to'];
-  const terminals = route.terminals ?? [];
-  const r = await planDay({ from, to, date, time, terminals, terminalSide, pattern: set.pattern, fetchJSON: (u) => getJSON(u) });
-  if (!r.primary) return null;
-  return { primary: r.primary, alternatives: r.alternatives, time, pattern: set.pattern, plannedAt: now.toISOString() };
+  // Search the saved trip's own lines: for a time where setup had to substitute other lines,
+  // those are what the user takes.
+  const saved = set.byTime?.[time]?.primary;
+  const r = await planDay({
+    from,
+    to,
+    date,
+    time,
+    terminals: route.terminals ?? [],
+    terminalSide,
+    pattern: saved ? linesOf(saved) : set.pattern,
+    board: preferredBoarding(set, time),
+    fetchJSON: (u) => getJSON(u),
+  });
+  const base = { time, pattern: set.pattern, plannedAt: now.toISOString() };
+  if (!r.primary) return { ...base, primary: null, notOffered: true, offered: r.options.slice(0, 3).map((o) => `${o.startLocal}-${o.endLocal} ${o.summary}`) };
+  return { ...base, primary: r.primary, alternatives: r.alternatives };
 }
 
 function makeCtx(env, now) {
@@ -100,8 +171,9 @@ function makeCtx(env, now) {
   return {
     now,
     store,
-    source: () => workerSource(env, store, now),
-    notify: (msg) => notify(env, store, now, msg),
+    source: async ({ reuse } = {}) =>
+      reuse ? (await checkSource(env, store, now, reuse.date, reuse.dir)).source : workerSource(env, store, now),
+    notify: (msgs, opts) => notify(env, store, now, msgs, opts),
     fire: (req) => fireRoutine(env, req),
     canFire: routineConfigured(env),
     replan: (route, date, dir) => replan(route, date, dir, now),
@@ -121,6 +193,8 @@ function validRoute(r) {
     for (const f of ['arriveBy', 'leaveWork']) if (t[f] != null && !HHMM.test(t[f])) return `${f} must be HH:MM`;
   }
   if (r.schedule.nightCheck != null && !HHMM.test(r.schedule.nightCheck)) return 'nightCheck must be HH:MM';
+  // Before 04:00 it runs after midnight on the commute day; a morning time would run a day early.
+  if (r.schedule.nightCheck >= '04:00' && r.schedule.nightCheck < '12:00') return '睡前检查时间要在 12:00 之后，或 00:00–03:59';
   if (!r.morning) return 'morning route is required';
   for (const dir of DIRS) {
     if (!r[dir]) continue;
@@ -143,11 +217,22 @@ const trimSet = (set) =>
   };
 
 /** The trip the user is on or about to start today: morning until its watch ends, then evening. */
-async function currentTrip(store, route, now) {
+async function currentTrip(store, route, pause, now) {
   const today = pacificDate(now);
+  if (pause.dates.includes(today)) return null;
   for (const dir of DIRS) {
     const trip = tripFor(route, today, dir, await store.plan(today, dir));
     if (trip && now <= watchWindow(route, today, dir, trip).end) return trip;
+  }
+  return null;
+}
+
+/** The next commute day after today that isn't paused (within a week). */
+function nextCommuteDay(route, pause, now) {
+  const today = pacificDate(now);
+  for (let i = 1; i <= 7; i++) {
+    const d = addDays(today, i);
+    if (dayTimes(route, d) && !pause.dates.includes(d)) return d;
   }
   return null;
 }
@@ -202,9 +287,23 @@ async function handleApi(request, env, url) {
     if (err) return fail(400, err);
     const record = { ...body, auto: false, checkedAt: body.checkedAt ?? now.toISOString() };
     record.dir ??= checkByMode(record.mode)?.dir ?? dirAt(pacificHHMM(now));
+    // A verdict built from data older than a problem the watch has since pushed (new, worse or
+    // changed), and milder than that problem, must not be the last word on the phone.
+    const RANK = { green: 0, yellow: 1, red: 2 };
+    const watch = await store.watch(record.targetDate, record.dir);
+    const newer = record.digestAt
+      ? openIssues(watch?.issues).filter((i) => (i.notifiedAt ?? i.firstSeen) > record.digestAt && RANK[i.notified] > RANK[record.level])
+      : [];
+    if (newer.length) record.superseded = `分析之后又发现：${newer.map((i) => i.text).join('；')}`;
+    if (newer.length || !shouldPush(record, await store.route())) {
+      await saveRecord(store, record);
+      return json({ ok: true, pushed: 'skipped', delivered: null, reason: newer.length ? 'superseded' : 'policy' });
+    }
+    const pushed = await notify(env, store, now, recordMessage(record));
+    // The cron re-sends a result whose push didn't get through (see monitor.js).
+    record.push = { delivered: pushed.delivered, deliverable: pushed.deliverable, attempts: 1, at: now.toISOString() };
     await saveRecord(store, record);
-    const pushed = shouldPush(record, await store.route()) ? await notify(env, store, now, recordMessage(record)) : 'skipped';
-    return json({ ok: true, pushed });
+    return json({ ok: true, pushed, delivered: pushed.delivered });
   }
 
   // The routine's input: everything one check needs, built from the watch's fresh data.
@@ -215,8 +314,26 @@ async function handleApi(request, env, url) {
     if (!DATE_RE.test(date)) return fail(400, 'date must be YYYY-MM-DD');
     const dir = url.searchParams.get('dir') || checkByMode(mode)?.dir || dirAt(pacificHHMM(now));
     if (!DIRS.includes(dir)) return fail(400, 'dir must be morning or evening');
-    const source = withSnapshot(workerSource(env, store, now), await store.watch(date, dir), now);
-    const { digest } = await buildDigest({ mode, date, dir, now, source });
+    const { source, tight, watch, snapshotAt } = await checkSource(env, store, now, date, dir);
+    // Today's watch knows what the feeds have forgotten (a boat that left, a cancelled trip gone from the feed).
+    const prev = date === pacificDate(now) ? (watch?.timing?.legs ?? null) : null;
+    const { digest } = await buildDigest({ mode, date, dir, now, source, prev });
+    await source.flush().catch(() => {});
+    digest.dataAt = snapshotAt ?? digest.generatedAt;
+    if (tight) {
+      digest.errors.push({ source: '511 额度', message: '这一小时的 511 调用快用完了：实时数据用的是 Worker 最近一次巡查的结果，备选路线的公告没查' });
+    }
+    // Problems the watch has already pushed to the phone, so the verdict can account for them.
+    digest.watch = watch
+      ? {
+          lastPollAt: watch.lastPollAt,
+          openIssues: openIssues(watch.issues).map((i) => ({ level: i.level, leg: i.legLabel, text: i.text, since: i.firstSeen })),
+        }
+      : null;
+    // The watch uses this to tell whether a run it just woke has already read its data.
+    const fires = await store.fires(date);
+    fires.lastDigestAt = now.toISOString();
+    await store.putFires(date, fires);
     return json(digest);
   }
 
@@ -255,29 +372,45 @@ async function handleApi(request, env, url) {
   }
 
   // 「立即检查」: poll the current trip now instead of waiting for the next 10-minute slot.
+  // Limited so the 511 key (60 calls/hour, shared with the watch and Claude) isn't exhausted.
   if (path === '/api/check-now' && method === 'POST') {
-    const route = await store.route();
-    const trip = route && (await currentTrip(store, route, now));
+    const [route, pause] = await Promise.all([store.route(), store.pause()]);
+    const trip = route && (await currentTrip(store, route, pause, now));
     if (!trip) return fail(400, '今天没有还没结束的行程');
     const prev = await store.watch(trip.date, trip.dir);
-    if (prev?.lastPollAt && now - new Date(prev.lastPollAt) < 2 * MIN) return json({ ok: true, throttled: true });
-    const did = await poll(makeCtx(env, now), route, trip.date, trip.dir, prev);
+    const sinceMin = prev?.lastPollAt ? (now - new Date(prev.lastPollAt)) / MIN : Infinity;
+    const manual = (prev?.manual ?? []).filter((t) => now - new Date(t) < 60 * MIN);
+    const throttled = (message) => json({ ok: true, throttled: true, message });
+    if (sinceMin < 5) return throttled(`${Math.max(1, Math.round(sinceMin))} 分钟前刚查过，结果就是最新的`);
+    if (manual.length >= 3) return throttled('一小时内已经手动查了 3 次（511 每小时有调用上限），等自动巡查');
+    // Leave room for this poll and the scheduled polls still due this hour.
+    const cost = prev?.calls ?? 6;
+    const scheduled = Math.ceil((60 - now.getUTCMinutes()) / 10);
+    if ((await store.used511(now)) + cost * (scheduled + 1) > BUDGET_PER_HOUR - 5) {
+      return throttled('这一小时的 511 调用快用完了，等自动巡查');
+    }
+    const win = watchWindow(route, trip.date, trip.dir, trip);
+    const did = await poll(makeCtx(env, now), route, trip.date, trip.dir, prev, win, { manual: [...manual, now.toISOString()] });
     return json({ ok: true, did });
   }
 
-  // 「让 Claude 看一下」: wake the routine for the current or next trip.
+  // 「让 Claude 看一下」: wake the routine for the current trip, or the next commute day's morning.
   if (path === '/api/analyze' && method === 'POST') {
     if (!routineConfigured(env)) return fail(400, 'Claude routine 还没有设置（ROUTINE_ID / ROUTINE_TOKEN）');
-    const route = await store.route();
-    const trip = route && (await currentTrip(store, route, now));
-    const date = trip?.date ?? targetDateFor('night', now);
+    const [route, pause] = await Promise.all([store.route(), store.pause()]);
+    if (!route?.schedule) return fail(400, '还没有设置路线');
+    const trip = await currentTrip(store, route, pause, now);
+    const date = trip?.date ?? nextCommuteDay(route, pause, now);
+    if (!date) return fail(400, '接下来一周没有要检查的通勤日');
     const dir = trip?.dir ?? 'morning';
     const fires = await store.fires(date);
-    if (fires.alerts.filter((f) => now - new Date(f.at) < 60 * MIN).length >= 3) return fail(429, '一小时内已经分析过 3 次了');
+    // Every Claude run reads 511 too: with 4 runs (checks included) in the last hour, wait.
+    const runs = [...Object.values(fires.checks), ...fires.alerts].filter((f) => now - new Date(f.at) < 60 * MIN);
+    if (runs.length >= 4) return fail(429, '一小时内 Claude 已经分析过 4 次了，稍后再试');
     const res = await fireRoutine(env, { mode: 'alert', date, dir, reason: '用户在 App 里点了「让 Claude 看一下」' });
     fires.alerts.push({ at: now.toISOString(), dir, manual: true, ...res });
     await store.putFires(date, fires);
-    return json(res);
+    return json({ ...res, date, dir });
   }
 
   if (path === '/api/tick' && method === 'POST' && role === 'writer') return json({ did: await tick(makeCtx(env, now)) });

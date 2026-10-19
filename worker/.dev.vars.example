@@ -3,7 +3,8 @@ WRITE_TOKEN=dev-write
 # Fill with `node scripts/vapid-keys.mjs` to try notifications locally
 VAPID_PUBLIC_KEY=
 VAPID_PRIVATE_JWK=
-# Real 511 data locally (or API_511_BASE=http://127.0.0.1:8788 with a mock server)
+# Real 511 data: your token, API_511_BASE empty. With `node scripts/mock-511.mjs` instead:
+#   API_511_KEY=dev-mock (any non-empty value) and API_511_BASE=http://127.0.0.1:8788
 API_511_KEY=
 API_511_BASE=
 # Leave empty so local testing doesn't wake the real routine or push to ntfy

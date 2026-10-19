@@ -3,7 +3,7 @@
 // served network-first with the cache as fallback, and the last /api/status response is kept
 // so the most recent verdict still shows on the ferry without signal.
 
-const CACHE = 'cg-v4';
+const CACHE = 'cg-v6';
 const SHELL = [
   '/',
   '/setup',
@@ -35,10 +35,12 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
-  const cacheable = !url.pathname.startsWith('/api/') || url.pathname === '/api/status';
-  if (!cacheable) return;
+  const isStatus = url.pathname === '/api/status';
+  if (url.pathname.startsWith('/api/') && !isStatus) return;
   // `no-cache` makes the browser revalidate (cheap 304s) so a redeploy reaches the phone at once.
-  const fresh = e.request.mode === 'navigate' ? fetch(e.request) : fetch(e.request, { cache: 'no-cache' });
+  let fresh = e.request.mode === 'navigate' ? fetch(e.request) : fetch(e.request, { cache: 'no-cache' });
+  // A weak signal can hang a request for a minute: give the status 8 s, then show the cached one.
+  if (isStatus) fresh = Promise.race([fresh, new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000))]);
   e.respondWith(
     fresh
       .then((res) => {
@@ -48,7 +50,14 @@ self.addEventListener('fetch', (e) => {
         }
         return res;
       })
-      .catch(() => caches.match(e.request, { ignoreSearch: true })),
+      .catch(async () => {
+        const cached = await caches.match(e.request, { ignoreSearch: true });
+        if (!cached || !isStatus) return cached;
+        // Mark it, so the page shows it as old data instead of live.
+        const headers = new Headers(cached.headers);
+        headers.set('X-From-Cache', '1');
+        return new Response(await cached.blob(), { status: cached.status, headers });
+      }),
   );
 });
 
@@ -68,7 +77,7 @@ self.addEventListener('push', (e) => {
       renotify: Boolean(d.tag),
       icon: '/icons/icon-192.png',
       badge: '/icons/icon-192.png',
-      data: { url: d.url || '/' },
+      data: { url: d.url || '/', badge: d.badge, at: Date.now() },
     }),
   ];
   if (typeof d.badge === 'number' && self.navigator.setAppBadge) {
@@ -76,22 +85,28 @@ self.addEventListener('push', (e) => {
   }
   e.waitUntil(
     Promise.all(jobs).then(async () => {
-      for (const c of await self.clients.matchAll({ type: 'window' })) c.postMessage('refresh');
+      for (const c of await self.clients.matchAll({ type: 'window' })) c.postMessage({ type: 'refresh', badge: d.badge, at: Date.now() });
     }),
   );
 });
 
+// Tapping a notification always lands on the status page, even if the app was left on 设置.
+// The page is told what the push said (badge, when), so it can keep that until the status catches up.
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const url = e.notification.data?.url || '/';
+  const data = e.notification.data ?? {};
+  const url = new URL(data.url || '/', self.location.origin);
+  if (typeof data.badge === 'number') url.search = new URLSearchParams({ pushBadge: data.badge, pushAt: data.at ?? Date.now() }).toString();
   e.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (list) => {
       const open = list.find((c) => 'focus' in c);
-      if (open) {
-        open.postMessage('refresh');
-        return open.focus();
+      if (!open) return self.clients.openWindow(url.href);
+      if (new URL(open.url).pathname !== url.pathname) {
+        const moved = 'navigate' in open ? await open.navigate(url.href).catch(() => null) : null;
+        return moved ? moved.focus() : self.clients.openWindow(url.href);
       }
-      return self.clients.openWindow(url);
+      open.postMessage({ type: 'refresh', badge: data.badge, at: data.at });
+      return open.focus();
     }),
   );
 });

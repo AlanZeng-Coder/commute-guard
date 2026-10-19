@@ -1,6 +1,7 @@
-// Everything that reaches the phone goes through notify(): it logs the message to the day's
-// event list (the app's 「今天的消息」), pushes it to every installed copy of the app (Web
-// Push) and, if NTFY_TOPIC is set, to ntfy as a backup channel.
+// Everything that reaches the phone goes through notify(): it pushes each message to every
+// installed copy of the app (Web Push) and, if NTFY_TOPIC is set, to ntfy as a backup channel,
+// then logs the batch to the day's event list (the app's 「今天的通知」) in one KV write —
+// KV allows one write per second per key, so per-message writes would fail on a busy poll.
 
 import { openIssues } from '../../checker/lib/issues.mjs';
 import { DIRS } from '../../shared/schedule.mjs';
@@ -20,29 +21,19 @@ export function vapidOf(env) {
   };
 }
 
-/** Open problems across today's trips — shown as the red badge on the app icon. */
-export async function openCount(store, date) {
-  const watches = await Promise.all(DIRS.map((d) => store.watch(date, d)));
-  return watches.reduce((n, w) => n + openIssues(w?.issues).length, 0);
-}
-
-async function pushAll(env, store, payload, opts) {
-  const vapid = vapidOf(env);
-  const subs = await store.subs();
-  if (!vapid) return { sent: 0, failed: 0, subscriptions: subs.length, error: 'VAPID keys not set' };
-  const results = await Promise.all(
-    subs.map((s) => sendPush(s, payload, vapid, opts).catch((err) => ({ ok: false, gone: false, status: 'error', detail: String(err.message) }))),
-  );
-  const alive = subs.filter((_, i) => !results[i].gone);
-  if (alive.length !== subs.length) await store.putSubs(alive);
-  const failed = results.filter((r) => !r.ok);
-  return {
-    sent: results.length - failed.length,
-    failed: failed.length,
-    removed: subs.length - alive.length,
-    subscriptions: alive.length,
-    errors: failed.slice(0, 3).map((r) => `${r.status} ${r.detail}`.trim()),
-  };
+/**
+ * Open problems on today's trips that are still under way — the red badge on the app icon.
+ * `override` replaces a direction's stored issues (the poll that is about to save them).
+ */
+export async function openCount(store, now, override = {}) {
+  const date = pacificDate(now);
+  let n = 0;
+  for (const dir of DIRS) {
+    const w = await store.watch(date, dir);
+    if (w?.windowEnd && now > new Date(w.windowEnd)) continue;
+    n += openIssues(override[dir] ?? w?.issues).length;
+  }
+  return n;
 }
 
 async function ntfy(env, msg, click) {
@@ -61,30 +52,89 @@ async function ntfy(env, msg, click) {
   return res?.ok ? 'sent' : `ntfy ${res?.status ?? 'network error'}`;
 }
 
-/**
- * msg: { kind, level, title, body, dir?, date?, tag?, ttl? }
- * kind: issue | worse | resolved | check | test. Returns delivery details for the API caller.
- */
-export async function notify(env, store, now, msg, { log = true } = {}) {
-  const today = pacificDate(now);
-  if (log) {
-    const events = await store.events(today);
-    events.push({
-      at: now.toISOString(),
-      kind: msg.kind,
-      level: msg.level,
-      title: msg.title,
-      body: msg.body,
-      dir: msg.dir ?? null,
-      date: msg.date ?? today,
-    });
-    await store.putEvents(today, events.slice(-MAX_EVENTS));
+async function putEvents(store, date, add) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await store.putEvents(date, [...(await store.events(date)), ...add].slice(-MAX_EVENTS));
+      return;
+    } catch (err) {
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 1100));
+      else console.error('event log write failed', err);
+    }
   }
+}
+
+/**
+ * msgs: one message or a list of { kind, level, title, body, dir?, date?, tag?, ttl?, badge? }
+ * (kind: issue | worse | update | resolved | check | test).
+ * Returns one result per message: { delivered, deliverable, webpush, ntfy }. With
+ * `logFailed: false`, messages that could have been delivered but weren't are left out of the
+ * log — the caller sends them again later.
+ */
+export async function notify(env, store, now, msgs, { log = true, logFailed = true } = {}) {
+  const list = Array.isArray(msgs) ? msgs : [msgs];
+  const vapid = vapidOf(env);
+  let subs = await store.subs();
   const origin = await store.origin();
-  const payload = { title: msg.title, body: msg.body, tag: msg.tag ?? null, badge: await openCount(store, today), url: '/' };
-  const [webpush, ntfyResult] = await Promise.all([
-    pushAll(env, store, payload, { ttl: msg.ttl ?? 3600, urgency: msg.level === 'green' ? 'normal' : 'high' }),
-    ntfy(env, msg, origin),
-  ]);
-  return { webpush, ntfy: ntfyResult };
+  const badge = list.some((m) => m.badge === undefined) ? await openCount(store, now) : null;
+  const results = [];
+  let subsChanged = false;
+
+  for (const msg of list) {
+    const payload = { title: msg.title, body: msg.body, tag: msg.tag ?? null, badge: msg.badge ?? badge, url: '/' };
+    const opts = { ttl: msg.ttl ?? 3600, urgency: msg.level === 'green' ? 'normal' : 'high' };
+    const sent = vapid
+      ? await Promise.all(
+          subs.map((s) => sendPush(s, payload, vapid, opts).catch((err) => ({ ok: false, gone: false, status: 'error', detail: String(err.message) }))),
+        )
+      : [];
+    subs = subs
+      .map((s, i) => {
+        const r = sent[i];
+        if (!r) return s;
+        const fails = r.ok ? 0 : (s.fails ?? 0) + 1;
+        if (fails !== (s.fails ?? 0)) subsChanged = true;
+        return { ...s, fails, lastError: r.ok ? null : `${r.status} ${r.detail}`.trim() };
+      })
+      // Only the push service saying the subscription is gone (404/410) removes it. Other failures
+      // (an outage, an old VAPID key) are counted and shown in the app, and the message is retried.
+      .filter((s, i) => {
+        if (sent[i]?.gone) subsChanged = true;
+        return !sent[i]?.gone;
+      });
+    const ntfyResult = await ntfy(env, msg, origin);
+    const ok = sent.filter((r) => r.ok).length;
+    results.push({
+      delivered: ok > 0 || ntfyResult === 'sent',
+      deliverable: Boolean((vapid && sent.length) || env.NTFY_TOPIC),
+      webpush: {
+        sent: ok,
+        failed: sent.length - ok,
+        subscriptions: subs.length,
+        errors: sent.filter((r) => !r.ok).slice(0, 3).map((r) => `${r.status} ${r.detail}`.trim()),
+        ...(vapid ? {} : { error: 'VAPID keys not set' }),
+      },
+      ntfy: ntfyResult,
+    });
+  }
+  if (subsChanged) await store.putSubs(subs);
+
+  if (log) {
+    const today = pacificDate(now);
+    const add = list
+      .map((msg, i) => ({ msg, r: results[i] }))
+      .filter(({ r }) => logFailed || r.delivered || !r.deliverable)
+      .map(({ msg, r }) => ({
+        at: now.toISOString(),
+        kind: msg.kind,
+        level: msg.level,
+        title: msg.title,
+        body: msg.body,
+        dir: msg.dir ?? null,
+        date: msg.date ?? today,
+        delivered: r.delivered,
+      }));
+    if (add.length) await putEvents(store, today, add);
+  }
+  return Array.isArray(msgs) ? results : results[0];
 }

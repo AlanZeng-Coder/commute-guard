@@ -14,12 +14,18 @@ export function validRecord(r) {
   return null;
 }
 
-/** Store a result; a later result for the same check replaces the earlier one. */
+/**
+ * Store a result; a later result for the same check replaces the earlier one — except that the
+ * Worker's automatic result never replaces Claude's. Returns false when nothing was saved.
+ */
 export async function saveRecord(store, record) {
-  const list = (await store.checks(record.targetDate)).filter((r) => r.mode !== record.mode);
+  const existing = await store.checks(record.targetDate);
+  if (record.auto && existing.some((r) => r.mode === record.mode && !r.auto)) return false;
+  const list = existing.filter((r) => r.mode !== record.mode);
   list.push(record);
   list.sort((a, b) => MODES.indexOf(a.mode) - MODES.indexOf(b.mode));
   await store.putChecks(record.targetDate, list);
+  return true;
 }
 
 /** Problems always reach the phone; a green result only for the checks the user wants. */

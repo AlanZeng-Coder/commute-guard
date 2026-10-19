@@ -1,56 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
-import { createFixtureSource } from '../../checker/lib/fixtures.mjs';
 import { checkpointsFor, tripFor, watchWindow } from '../../shared/schedule.mjs';
-import { tick } from '../src/monitor.js';
-import { createStore, memoryKV } from '../src/store.js';
-
-const fixtures = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'checker', 'fixtures');
-const routeOf = (scenario) => JSON.parse(readFileSync(join(fixtures, scenario, 'route.json'), 'utf8'));
-
-// Commute day in the fixtures: Wed 2026-10-14 (PDT, UTC-7). Leave 06:30, ferry SEA 07:00, must arrive 08:30.
-const at = (hhmm, day = '14') => new Date(`2026-10-${day}T${hhmm}:00-07:00`);
-
-/** A Worker run against an in-memory KV, with 511 served from a fixture scenario. */
-function harness(route, { canFire = true, fireOk = true } = {}) {
-  const kv = memoryKV();
-  const store = createStore(kv);
-  const pushed = [];
-  const fired = [];
-  let scenario = 'normal';
-  const run = async (now) => {
-    const ctx = {
-      now,
-      store,
-      source: () => ({ ...createFixtureSource(join(fixtures, scenario)), route: store.route, pause: store.pause, plan: store.plan }),
-      notify: async (msg) => {
-        pushed.push(msg);
-        const events = await store.events('2026-10-14');
-        await store.putEvents('2026-10-14', [...events, msg]);
-      },
-      fire: async (req) => {
-        fired.push(req);
-        return fireOk ? { ok: true, status: 200 } : { ok: false, status: 500 };
-      },
-      canFire,
-      replan: async () => null,
-    };
-    return tick(ctx);
-  };
-  return {
-    store,
-    pushed,
-    fired,
-    run,
-    use: (s) => {
-      scenario = s;
-    },
-    ready: () => store.put('route', route),
-  };
-}
+import { at, harness, routeOf } from './harness.mjs';
 
 test('checkpoints and the watch window follow each day’s own times', () => {
   const route = routeOf('normal');

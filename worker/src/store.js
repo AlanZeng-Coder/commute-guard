@@ -9,6 +9,7 @@
 //   events:<date>              everything pushed to the phone that day, newest last
 //   push:subs                  Web Push subscriptions (one per installed app)
 //   tt:<date>:<agency>:<stop>  that day's ferry timetable (fetched once a day)
+//   use511:<UTC hour>          511 calls made this hour (the key allows 60/hour)
 //   meta:origin                the site's URL, for notification links
 
 const DAY = 86400;
@@ -35,6 +36,12 @@ export function createStore(kv) {
     subs: () => get('push:subs', []),
     putSubs: (list) => put('push:subs', list),
     origin: () => kv.get('meta:origin'),
+    used511: async (now) => Number((await kv.get(`use511:${now.toISOString().slice(0, 13)}`)) ?? 0),
+    async addUsed511(now, n) {
+      if (!n) return;
+      const key = `use511:${now.toISOString().slice(0, 13)}`;
+      await kv.put(key, String(Number((await kv.get(key)) ?? 0) + n), { expirationTtl: DAY });
+    },
   };
 }
 

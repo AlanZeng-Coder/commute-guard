@@ -5,7 +5,7 @@
 // Transitous serves the 511 regional GTFS feed, so agency ids (SB, SF, BA, AC), route ids
 // ("SB:SEA") and stop codes line up with the 511 realtime APIs the checker uses.
 
-import { pacificHHMM, pacificToDate } from './time.mjs';
+import { pacificDate, pacificHHMM, pacificToDate } from './time.mjs';
 
 export const TRANSITOUS = 'https://api.transitous.org';
 export const ATTRIBUTION_URL = 'https://transitous.org/sources/';
@@ -76,8 +76,11 @@ function finish(legs) {
 
 export function normalizeItinerary(it) {
   const out = finish((it.legs ?? []).map(normalizeLeg));
-  return { ...out, durationMin: Math.round((it.duration ?? 0) / 60) };
+  // Absolute instants: HH:MM alone can't tell tonight from tomorrow morning.
+  return { ...out, durationMin: Math.round((it.duration ?? 0) / 60), startAt: it.startTime ?? null, endAt: it.endTime ?? null };
 }
+
+const plusMinutes = (iso, m) => (iso ? new Date(Date.parse(iso) + m * 60000).toISOString() : null);
 
 const toMin = (hhmm) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
 const fromMin = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -94,7 +97,8 @@ const withDuration = (out) => ({ ...out, durationMin: minutes(`1970-01-01T${out.
 
 function compose(access, main) {
   const board = main.legs.find((l) => l.transit)?.depLocal;
-  return withDuration(finish([...shiftWalkAccess(access.legs, board), ...main.legs]));
+  const out = withDuration(finish([...shiftWalkAccess(access.legs, board), ...main.legs]));
+  return { ...out, startAt: plusMinutes(main.startAt, toMin(out.startLocal) - toMin(main.startLocal)), endAt: main.endAt };
 }
 
 /** `main` ends at a terminal; walk on from there (`egress` is a walking plan, re-timed to follow). */
@@ -105,7 +109,8 @@ function composeEgress(main, egress) {
     t += l.durationMin;
     return out;
   });
-  return withDuration(finish([...main.legs, ...legs]));
+  const out = withDuration(finish([...main.legs, ...legs]));
+  return { ...out, startAt: main.startAt, endAt: plusMinutes(main.endAt, toMin(out.endLocal) - toMin(main.endLocal)) };
 }
 
 /** The lines a commute uses, in order ("SB:SEA>N") — what the user picks once per direction. */
@@ -195,9 +200,15 @@ const place = (p) => (p.id && !p.lat ? p.id : `${p.lat},${p.lon}`);
  *   terminalSide 'to' (home):       "origin → terminal" + walk home
  * (Transitous' `via` parameter lets a trip stay aboard through the via stop, which gives odd results.)
  */
-export async function planOptions({ from, to, date, departTime, terminals = [], terminalSide = 'from', fetchJSON, slackMin = 45 }) {
+export async function planOptions(args) {
+  return (await planOptionsDetailed(args)).options;
+}
+
+/** planOptions plus how many planner requests failed (a failure must not look like "no such trip"). */
+export async function planOptionsDetailed({ from, to, date, departTime, terminals = [], terminalSide = 'from', fetchJSON, slackMin = 45 }) {
   const time = pacificToDate(date, departTime).toISOString();
   const results = [];
+  let failed = 0;
 
   const direct = plan(fetchJSON, { fromPlace: place(from), toPlace: place(to), time, numItineraries: '4' }).then((r) =>
     (r.itineraries ?? []).map(normalizeItinerary),
@@ -238,15 +249,20 @@ export async function planOptions({ from, to, date, departTime, terminals = [], 
   const viaTerminals = terminals.map(terminalSide === 'to' ? viaTo : viaFrom);
   for (const r of await Promise.allSettled([direct, ...viaTerminals])) {
     if (r.status === 'fulfilled') results.push(...r.value);
+    else failed++;
   }
 
   // Keep the earliest arrival per signature, then drop options that arrive much later than
   // the best one of the same kind (ferry vs. not), so the list stays short and sensible.
+  // When nothing runs in the evening the planner offers next-morning trips: those are not options.
+  const t0 = Date.parse(time);
+  const endOf = (it) => (it.endAt ? Date.parse(it.endAt) : pacificToDate(date, it.endLocal).getTime());
   const seen = new Set();
   const unique = results
-    // Overnight or absurdly long results (the planner's fallback when nothing runs) are not commutes.
-    .filter((it) => it.durationMin > 0 && it.durationMin <= 240 && it.endLocal > it.startLocal)
-    .sort((a, b) => a.endLocal.localeCompare(b.endLocal))
+    // Absolute times allow trips across midnight; without them HH:MM order is all there is.
+    .filter((it) => it.durationMin > 0 && it.durationMin <= 240 && (it.startAt || it.endLocal > it.startLocal))
+    .filter((it) => !it.startAt || (pacificDate(new Date(it.startAt)) === date && Date.parse(it.startAt) - t0 <= 3 * 3600000))
+    .sort((a, b) => endOf(a) - endOf(b))
     .filter((it) => {
       const sig = signature(it);
       if (seen.has(sig)) return false;
@@ -254,20 +270,32 @@ export async function planOptions({ from, to, date, departTime, terminals = [], 
       return true;
     });
   const best = {};
-  for (const it of unique) best[it.hasFerry] ??= toMin(it.endLocal);
-  return unique
-    .filter((it) => toMin(it.endLocal) <= best[it.hasFerry] + slackMin)
-    .sort((a, b) => Number(b.hasFerry) - Number(a.hasFerry) || a.endLocal.localeCompare(b.endLocal))
+  for (const it of unique) best[it.hasFerry] ??= endOf(it);
+  const options = unique
+    .filter((it) => endOf(it) <= best[it.hasFerry] + slackMin * 60000)
+    .sort((a, b) => Number(b.hasFerry) - Number(a.hasFerry) || endOf(a) - endOf(b))
     .slice(0, 8);
+  return { options, failed };
 }
 
+const boardOf = (it) => (it.legs.find((l) => l.transit && l.mode === 'FERRY') ?? it.legs.find((l) => l.transit))?.depLocal;
+
 /**
- * Plan one departure time and pick the option that uses the same lines the user chose.
- * Returns { primary: null, options } when that combination isn't offered at this time.
+ * Plan one departure time and pick the option on the same lines the user chose, boarding as
+ * close as possible to `board` (their chosen boat). Returns { primary: null } with the other
+ * options when those lines aren't offered at this time; throws when the planner itself failed,
+ * so a failure never reads as "your lines don't run".
  */
-export async function planDay({ from, to, date, time, terminals, terminalSide, pattern, fetchJSON }) {
-  const options = await planOptions({ from, to, date, departTime: time, terminals, terminalSide, fetchJSON });
-  const i = options.findIndex((o) => patternOf(o) === pattern);
-  if (i < 0) return { primary: null, alternatives: [], options };
-  return { primary: options[i], alternatives: options.filter((_, j) => j !== i).slice(0, 4), options };
+export async function planDay({ from, to, date, time, terminals, terminalSide, pattern, board = null, fetchJSON }) {
+  const { options, failed } = await planOptionsDetailed({ from, to, date, departTime: time, terminals, terminalSide, fetchJSON });
+  const mine = options
+    .map((o, i) => ({ o, i }))
+    .filter(({ o }) => patternOf(o) === pattern)
+    .sort((a, b) => (board ? Math.abs(toMin(boardOf(a.o)) - toMin(board)) - Math.abs(toMin(boardOf(b.o)) - toMin(board)) : 0) || a.i - b.i)[0];
+  // With some requests failed, a match is trusted only if it is the boat asked for — otherwise the
+  // missing answers may well have held it.
+  const exact = mine && (!board || Math.abs(toMin(boardOf(mine.o)) - toMin(board)) <= 5);
+  if (failed && !exact) throw new Error(`Transitous 查询失败（${failed} 个请求出错），没法确认 ${time} 的班次`);
+  if (!mine) return { primary: null, alternatives: [], options };
+  return { primary: mine.o, alternatives: options.filter((_, j) => j !== mine.i).slice(0, 4), options };
 }

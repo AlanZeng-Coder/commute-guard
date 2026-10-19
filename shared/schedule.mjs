@@ -57,6 +57,9 @@ export const LEVEL_LABEL = { green: '🟢 正常', yellow: '🟡 注意', red: '
 
 export const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
+/** A night check set before this time runs after midnight, on the commute day itself. */
+export const NIGHT_AFTER_MIDNIGHT_UNTIL = '04:00';
+
 export const toMin = (hhmm) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
 
 export function fromMin(m) {
@@ -88,9 +91,15 @@ export function tripFor(route, date, dir, replanned = null) {
   const time = departureFor(route, date, dir);
   const set = route?.[dir];
   if (!time || !set) return null;
-  const fresh = replanned?.primary && replanned.time === time && replanned.pattern === set.pattern;
-  let plan = fresh ? replanned : set.byTime?.[time];
-  let source = fresh ? 'replanned' : 'saved';
+  // A re-plan counts only for the current time and lines, and only if made after the route was last saved.
+  const fresh =
+    replanned &&
+    replanned.time === time &&
+    replanned.pattern === set.pattern &&
+    (!route.savedAt || !replanned.plannedAt || replanned.plannedAt >= route.savedAt);
+  const saved = set.byTime?.[time];
+  let plan = fresh && replanned.primary ? replanned : saved;
+  let source = fresh && replanned.primary ? 'replanned' : 'saved';
   if (!plan?.primary) {
     const closest = Object.keys(set.byTime ?? {}).sort((a, b) => Math.abs(toMin(a) - toMin(time)) - Math.abs(toMin(b) - toMin(time)))[0];
     plan = set.byTime?.[closest];
@@ -105,6 +114,11 @@ export function tripFor(route, date, dir, replanned = null) {
     primary: plan.primary,
     alternatives: plan.alternatives ?? [],
     source,
+    savedEnd: saved?.primary?.endLocal ?? null,
+    // Tonight's re-plan gave up after 3 tries: the saved trip is unconfirmed for this date.
+    replanFailed: Boolean(replanned && !replanned.primary && !replanned.notOffered && (replanned.attempts ?? 0) >= 3),
+    // The re-plan found other options but none on this trip's lines (holiday / timetable change).
+    notOffered: Boolean(fresh && replanned.notOffered),
   };
 }
 
@@ -116,7 +130,8 @@ export function boardingTime(itinerary) {
 
 /**
  * Checkpoints for one commute day, each with the instant it is due. The night check runs the
- * evening before (`runDate`). `trips` = { morning, evening } from tripFor().
+ * evening before (`runDate`), or after midnight on the day itself for a late bedtime.
+ * `trips` = { morning, evening } from tripFor().
  */
 export function checkpointsFor(route, date, trips = {}) {
   const t = dayTimes(route, date);
@@ -124,8 +139,9 @@ export function checkpointsFor(route, date, trips = {}) {
   const leave = toMin(t.leaveHome);
   const at = (runDate, time) => ({ runDate, time, at: pacificToDate(runDate, time) });
   const board = boardingTime(trips.morning?.primary);
+  const night = route.schedule.nightCheck ?? DEFAULT_SCHEDULE.nightCheck;
   const out = [
-    { ...CHECKS[0], ...at(addDays(date, -1), route.schedule.nightCheck ?? DEFAULT_SCHEDULE.nightCheck) },
+    { ...CHECKS[0], ...at(night < NIGHT_AFTER_MIDNIGHT_UNTIL ? date : addDays(date, -1), night) },
     { ...CHECKS[1], ...at(date, fromMin(leave + OFFSETS.wake)) },
     { ...CHECKS[2], ...at(date, fromMin(leave + OFFSETS.leave)) },
     { ...CHECKS[3], ...at(date, fromMin(board ? toMin(board) + OFFSETS.enroute : leave + 30)) },
@@ -152,6 +168,28 @@ export function watchWindow(route, date, dir, trip) {
     start: pacificToDate(date, fromMin(toMin(time) + OFFSETS.eveningWatch)),
     end: pacificToDate(date, fromMin(toMin(arrive ?? fromMin(toMin(time) + 120)) + OFFSETS.watchAfterArrival)),
   };
+}
+
+/**
+ * The boarding time the user chose for `time` — or, for a time with no saved trip yet, the same
+ * gap after leaving that their other saved trips have. Re-planning aims for it so a later boat
+ * the user deliberately picked isn't swapped for the earliest one on the same lines.
+ */
+/** The lines an itinerary uses, in order ("SB:SEA>N"). */
+export const linesOf = (itinerary) =>
+  (itinerary?.legs ?? [])
+    .filter((l) => l.transit)
+    .map((l) => l.routeId)
+    .join('>');
+
+export function preferredBoarding(set, time) {
+  const own = boardingTime(set?.byTime?.[time]?.primary);
+  if (own) return own;
+  for (const [t, plan] of Object.entries(set?.byTime ?? {})) {
+    const b = boardingTime(plan.primary);
+    if (b) return fromMin(toMin(time) + toMin(b) - toMin(t));
+  }
+  return null;
 }
 
 /** Commute direction a free-form check (`alert`) is about, by time of day. */

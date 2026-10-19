@@ -18,10 +18,11 @@ import { routineConfigured } from './routine.js';
 
 const MIN = 60000;
 
-function nextCommuteDate(route, today) {
+/** The next commute day after today that isn't paused. */
+function nextCommuteDate(route, pause, today) {
   for (let i = 1; i <= 7; i++) {
     const d = addDays(today, i);
-    if (dayTimes(route, d)) return d;
+    if (dayTimes(route, d) && !pause.dates.includes(d)) return d;
   }
   return null;
 }
@@ -72,14 +73,17 @@ async function dayView(store, route, pause, date, now) {
       window: {
         start: pacificHHMM(win.start),
         end: pacificHHMM(win.end),
+        startsAt: win.start.toISOString(),
         endsAt: win.end.toISOString(),
         active: isToday && !paused && now >= win.start && now <= win.end,
       },
       watch: w && {
         lastPollAt: w.lastPollAt,
+        lastEventAt: w.lastEventAt ?? null,
         stale,
         level: w.level,
-        issues: openIssues(w.issues).map((i) => ({ level: i.level, leg: i.legLabel, text: i.text, since: i.firstSeen })),
+        // Problems on a trip that is over don't count any more (badge, focus card).
+        issues: now > win.end || paused ? [] : openIssues(w.issues).map((i) => ({ level: i.level, leg: i.legLabel, text: i.text, since: i.firstSeen })),
         legs: w.legs,
         timing: w.timing,
         errors: w.errors,
@@ -103,7 +107,7 @@ async function dayView(store, route, pause, date, now) {
   return { date, weekday: weekdayOf(date), times: dayTimes(route, date), paused, dirs, checkpoints, latest };
 }
 
-/** The trip the home screen leads with: the one in progress or next up. */
+/** The trip the home screen leads with: the one in progress or next up (never one that is over). */
 function focusOf(days, now) {
   for (const day of days) {
     for (const dir of DIRS) {
@@ -111,8 +115,7 @@ function focusOf(days, now) {
       if (d && !day.paused && now <= new Date(d.window.endsAt)) return { date: day.date, dir };
     }
   }
-  const first = days.find((d) => d.dirs.morning);
-  return first ? { date: first.date, dir: 'morning' } : null;
+  return null;
 }
 
 export async function statusPayload(store, env, now) {
@@ -120,7 +123,7 @@ export async function statusPayload(store, env, now) {
   const today = pacificDate(now);
   const days = [];
   if (route?.schedule) {
-    const dates = [...new Set([dayTimes(route, today) ? today : null, nextCommuteDate(route, today)])].filter(Boolean);
+    const dates = [...new Set([dayTimes(route, today) ? today : null, nextCommuteDate(route, pause, today)])].filter(Boolean);
     for (const date of dates) days.push(await dayView(store, route, pause, date, now));
   }
   return {
@@ -138,7 +141,13 @@ export async function statusPayload(store, env, now) {
     days,
     events: (await store.events(today)).slice(-40).reverse(),
     pause,
-    push: { subscriptions: subs.length, publicKey: env.VAPID_PUBLIC_KEY ?? null },
+    push: {
+      subscriptions: subs.length,
+      // The app compares its own subscription with these to re-subscribe after a key change.
+      endpoints: subs.map((x) => x.endpoint),
+      failing: subs.filter((x) => x.fails).map((x) => ({ endpoint: x.endpoint, fails: x.fails, error: x.lastError })),
+      publicKey: env.VAPID_PUBLIC_KEY ?? null,
+    },
     configured: {
       push: Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_JWK),
       routine: routineConfigured(env),

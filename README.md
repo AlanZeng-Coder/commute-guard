@@ -8,7 +8,7 @@ Alameda ⇄ SF（渡轮 + Muni）通勤预警，装在 iPhone 主屏幕上的 Ap
 
 | 检查 | 什么时候（按你当天的时间算） | 回答 |
 |---|---|---|
-| 睡前检查 | 前一晚 21:30（可改） | 明天要不要定早闹钟？ |
+| 睡前检查 | 前一晚 21:30（可改；设成 00:00–03:59 就是过了午夜再查） | 明天要不要定早闹钟？ |
 | 起床检查 | 出门前 50 分钟 | 要不要起来准备？ |
 | 出门检查 | 出门前 15 分钟 | 要不要出门？坐哪班、几点到？ |
 | 船上检查 | 上船后 10 分钟 | 到 SF 后 Muni 能不能坐？不能的话 Plan B |
@@ -27,7 +27,7 @@ Cloudflare Worker + KV（cron 每 5 分钟）───────────�
    ├─ 通勤时段：每 10 分钟拉 511 → 新问题 / 更严重 / 已恢复 → 立刻推送
    ├─ 到检查点、或发现新问题 → 叫醒 Claude routine（API 触发）
    ├─ Claude 没按时回 → 推送自动检查结果
-   └─ 每晚按明天的时间用 Transitous 重新排班次
+   └─ 睡前检查前，按明天的时间用 Transitous 重新排班次（坐的还是你选的那班；路线停开会提醒）
                 │ fire
                 ▼
 Claude Code routine（只有 API 触发）
@@ -83,7 +83,7 @@ Claude Code routine（只有 API 触发）
 npm test                                    # 离线测试（checker/fixtures 的假数据 + Worker 巡查逻辑 + 推送加密）
 node checker/collect.mjs --mode enroute --fixtures checker/fixtures/muni-down --now 2026-10-14T13:57:00Z
 cp worker/.dev.vars.example worker/.dev.vars && npm run dev   # 本地 Worker：http://127.0.0.1:8787
-node scripts/mock-511.mjs                   # 假 511 + 假推送服务（.dev.vars 里 API_511_BASE=http://127.0.0.1:8788）
+node scripts/mock-511.mjs                   # 假 511 + 假推送服务（.dev.vars 里 API_511_KEY=dev-mock、API_511_BASE=http://127.0.0.1:8788）
 curl "http://127.0.0.1:8787/__scheduled?cron=*/5+*+*+*+*"     # 手动触发一次 cron
 ```
 
@@ -97,4 +97,4 @@ curl "http://127.0.0.1:8787/__scheduled?cron=*/5+*+*+*+*"     # 手动触发一�
 - Cloudflare 免费版每次运行只有约 10ms CPU，所以每次 cron 最多做一件重活（查 511 / 兜底 / 重新排班次），其余等 5 分钟后。上线后用 `wrangler tail` 看有没有超时。
 - 不支持跨午夜的通勤。
 - Claude routine 还是研究预览，API 触发接口以后可能变。
-- 511 每个 key 每小时 60 次：Worker 巡查每小时约 30 次，Claude 每次分析大多复用 Worker 刚拉的数据；突发分析每小时最多 3 次。
+- 511 每个 key 每小时 60 次：Worker 巡查每次约 5 次调用（每多一段公交多 1–2 次），每小时约 30 次；Claude 的分析和自动检查复用 Worker 12 分钟内的数据；定时检查每次都会叫 Claude，突发分析在一小时内已经叫过 3 次时不再叫，「让 Claude 看一下」在一小时内已经跑过 4 次时不再叫；「立即检查」至少隔 5 分钟、每小时最多 3 次。这一小时快用完时，分析改用 Worker 最近的数据并跳过备选路线的公告。

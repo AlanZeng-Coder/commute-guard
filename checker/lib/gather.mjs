@@ -22,10 +22,11 @@ export function realtimeKinds(mode) {
 
 /**
  * `alternatives: false` skips alerts for agencies only the alternatives use, and
- * `weather: false` skips NWS — the Worker's watch only needs the primary trip.
+ * `weather: false` skips NWS — the Worker's watch only needs the primary trip. `realtime: false`
+ * skips live positions (a check about another day).
  */
-export function planRequests(trip, mode, { alternatives = true } = {}) {
-  const rt = realtimeKinds(mode);
+export function planRequests(trip, mode, { alternatives = true, realtime = true } = {}) {
+  const rt = realtime ? realtimeKinds(mode) : { ferry: false, line: false };
   const agencies = new Set();
   for (const it of [trip.primary, ...(alternatives ? trip.alternatives ?? [] : [])]) {
     for (const leg of transitLegs(it)) if (leg.agencyId) agencies.add(leg.agencyId);
@@ -54,8 +55,8 @@ export const emptyGathered = () => ({
   errors: [],
 });
 
-export async function gather(source, trip, mode, { alternatives = true, weather = true } = {}) {
-  const req = planRequests(trip, mode, { alternatives });
+export async function gather(source, trip, mode, { alternatives = true, weather = true, realtime = true } = {}) {
+  const req = planRequests(trip, mode, { alternatives, realtime });
   const { data, errors } = emptyGathered();
   const jobs = [];
   const job = (label, fn) =>

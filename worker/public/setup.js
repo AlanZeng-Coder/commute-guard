@@ -1,7 +1,7 @@
 import { Unauthorized, WEEKDAY, api, askPasscode, esc, registerSW } from './api.js';
-import { CHECKS, DEFAULT_NOTIFY, DEFAULT_SCHEDULE, HHMM, toMin } from './shared/schedule.mjs';
+import { CHECKS, DEFAULT_NOTIFY, DEFAULT_SCHEDULE, HHMM, preferredBoarding, toMin } from './shared/schedule.mjs';
 import { addDays, pacificDate, weekdayOf } from './shared/time.mjs';
-import { geocode, nearbyFerryTerminals, patternOf, planDay, planOptions } from './shared/transitous.mjs';
+import { geocode, nearbyFerryTerminals, patternOf, planDay, planOptionsDetailed } from './shared/transitous.mjs';
 
 const app = document.getElementById('app');
 const ICON = { WALK: '🚶', FERRY: '⛴', TRAM: '🚋', SUBWAY: '🚇', BUS: '🚌', RAIL: '🚆', CABLE_CAR: '🚡' };
@@ -29,6 +29,7 @@ const state = {
   evening: null,
   choosing: { morning: null, evening: null }, // { time, date, options, picked }
   saved: false,
+  planning: 0, // bumped when the addresses change, so a plan still in flight is discarded
 };
 
 // ---------- schedule helpers ----------
@@ -98,6 +99,7 @@ function timesCard() {
         <button id="copy-monday">把周一的时间复制到周二–周五</button>
       </div>
       <div class="grid2"><div><label for="night">睡前检查时间</label><input id="night" type="time" value="${esc(state.schedule.nightCheck ?? '21:30')}" /></div></div>
+      <p class="small muted">睡前检查要在 12:00 之后；设成 00:00–03:59 就是过了午夜、当天凌晨再查。</p>
     </section>`;
 }
 
@@ -181,20 +183,32 @@ function rerender(id, html) {
   bind();
 }
 
+/** Any edit after a save: the "已保存" banner would claim unsaved changes are saved. */
+function edited() {
+  if (!state.saved) return;
+  state.saved = false;
+  document.querySelector('.banner.info')?.remove();
+}
+
 // ---------- events ----------
 
 function bind() {
+  app.oninput = edited;
+  app.onchange = edited;
   for (const form of app.querySelectorAll('form[data-target]')) form.onsubmit = onSearch;
   for (const el of app.querySelectorAll('#times input')) el.onchange = onTimeChange;
   document.getElementById('copy-monday').onclick = () => {
     const mon = days()[1];
     if (!mon) return;
+    edited();
     for (const d of [2, 3, 4, 5]) days()[d] = { ...mon };
     rerender('times', timesCard());
     refreshDirs();
   };
   document.getElementById('night').onchange = (e) => {
-    if (HHMM.test(e.target.value)) state.schedule.nightCheck = e.target.value;
+    const v = e.target.value;
+    if (HHMM.test(v) && (v < '04:00' || v >= '12:00')) state.schedule.nightCheck = v;
+    else e.target.value = state.schedule.nightCheck ?? '21:30';
   };
   for (const b of app.querySelectorAll('[data-choose]')) b.onclick = () => onChoose(b.dataset.choose);
   for (const b of app.querySelectorAll('[data-use]')) b.onclick = () => onUse(b.dataset.use);
@@ -206,6 +220,7 @@ function bind() {
   }
   for (const b of app.querySelectorAll('[data-clear]')) {
     b.onclick = () => {
+      edited();
       state.evening = null;
       refreshDirs();
     };
@@ -235,6 +250,8 @@ function onTimeChange(e) {
   } else {
     days()[d][field] = e.target.value || null;
   }
+  // Without any 下班 time the evening card hides its options; don't leave a hidden choice open.
+  if (!timesFor('evening').length) state.choosing.evening = null;
   refreshDirs();
 }
 
@@ -262,9 +279,12 @@ async function onSearch(e) {
         list.classList.add('hidden');
         document.getElementById(`${target}-q`).value = r.label;
         document.getElementById(`${target}-picked`).textContent = `✓ ${r.label}`;
-        // A new address invalidates the trips planned from the old one.
+        // A new address invalidates the trips (and any open options) planned from the old one.
         state.morning = null;
         state.evening = null;
+        state.choosing = { morning: null, evening: null };
+        state.planning++;
+        edited();
         if (target === 'home') state.terminals = await nearbyFerryTerminals(state.home, fetchJSON, { limit: 2 }).catch(() => []);
         refreshDirs();
       }),
@@ -282,26 +302,42 @@ async function onChoose(dir) {
   const date = dateFor(dir, time);
   msg('规划中…（会查几次 Transitous，稍等）');
   try {
+    const run = state.planning;
     if (!state.terminals.length) state.terminals = await nearbyFerryTerminals(state.home, fetchJSON, { limit: 2 }).catch(() => []);
-    const options = await planOptions({ ...endpoints(dir), date, departTime: time, fetchJSON });
-    if (!options.length) return msg('没有找到方案，换个时间试试');
+    const { options, failed } = await planOptionsDetailed({ ...endpoints(dir), date, departTime: time, fetchJSON });
+    if (run !== state.planning) return; // the address changed meanwhile
+    if (!options.length) return msg(failed ? 'Transitous 查询失败，稍后再试' : '没有找到方案，换个时间试试');
     state.choosing[dir] = { time, date, options, picked: 0 };
     refreshDirs();
+    // Some requests failing usually means the ferry options are the ones missing.
+    if (failed) msg(`有 ${failed} 个查询失败，渡轮方案可能没列出来：没看到你坐的那条就稍后再查一次`);
   } catch (err) {
     msg(`规划失败：${err.message}`);
   }
 }
 
-/** Plan every departure time the schedule uses that has no trip yet, keeping the chosen lines. */
+/**
+ * Plan every departure time the schedule uses that has no trip yet, on the chosen lines and
+ * boarding the boat closest to the one picked. Throws when a time can't be planned (planner
+ * error, or nothing found) so Save never stores a wrong or missing trip silently.
+ */
 async function planMissing(dir, report) {
   const set = state[dir];
   if (!set) return;
   for (const time of timesFor(dir)) {
     if (set.byTime[time]) continue;
     report(`${DIR[dir].title.slice(0, 2)} ${time} 排班次…`);
-    const r = await planDay({ ...endpoints(dir), date: dateFor(dir, time), time, pattern: set.pattern, fetchJSON }).catch(() => null);
-    if (r?.primary) set.byTime[time] = { primary: r.primary, alternatives: r.alternatives };
-    else if (r?.options?.length) set.byTime[time] = { primary: r.options[0], alternatives: r.options.slice(1, 5) };
+    const r = await planDay({
+      ...endpoints(dir),
+      date: dateFor(dir, time),
+      time,
+      pattern: set.pattern,
+      board: preferredBoarding(set, time),
+      fetchJSON,
+    });
+    if (r.primary) set.byTime[time] = { primary: r.primary, alternatives: r.alternatives };
+    else if (r.options.length) set.byTime[time] = { primary: r.options[0], alternatives: r.options.slice(1, 5) };
+    else throw new Error(`${DIR[dir].title.slice(0, 2)} ${time} 查不到任何路线，换个时间试试`);
   }
   // Drop trips for times no longer used.
   for (const time of Object.keys(set.byTime)) if (!timesFor(dir).includes(time)) delete set.byTime[time];
@@ -315,11 +351,17 @@ async function onUse(dir) {
     byTime: { [ch.time]: { primary, alternatives: ch.options.filter((_, i) => i !== ch.picked).slice(0, 4) } },
   };
   state.choosing[dir] = null;
+  edited();
   refreshDirs();
   const msg = document.getElementById(`msg-${dir}`);
-  await planMissing(dir, (t) => (msg.textContent = t));
-  msg.textContent = '';
-  refreshDirs();
+  try {
+    await planMissing(dir, (t) => (msg.textContent = t));
+    msg.textContent = '';
+    refreshDirs();
+  } catch (err) {
+    refreshDirs();
+    document.getElementById(`msg-${dir}`).textContent = `${err.message}（保存时会再试）`;
+  }
 }
 
 async function onSave() {
@@ -329,6 +371,8 @@ async function onSave() {
   if (!Object.keys(days()).length) return (msg.textContent = '至少勾选一个通勤日');
   const noTime = DAY_ORDER.filter((d) => days()[d] && !HHMM.test(days()[d].leaveHome ?? ''));
   if (noTime.length) return (msg.textContent = `${noTime.map((d) => WEEKDAY[d]).join('、')}没填出门时间`);
+  const open = ['morning', 'evening'].filter((d) => state.choosing[d]?.options && timesFor(d).length);
+  if (open.length) return (msg.textContent = `${open.map((d) => DIR[d].title.slice(0, 2)).join('、')}的路线还没确认：先点「用这条路线」或「取消」`);
   if (!state.morning) return (msg.textContent = '先选去程路线');
   button.disabled = true;
   try {
